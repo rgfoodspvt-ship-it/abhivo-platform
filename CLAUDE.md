@@ -1,5 +1,30 @@
+## NEXT SESSION — START HERE
+Last worked: April 14, 2026
+Stopped at: Video generator produces working MP4 but with simple slide images (not animated scenes)
+
+IMMEDIATE NEXT TASK:
+Upgrade video generator from simple slides to richer visuals.
+Current v1: FFmpeg concat of 4 static scene images + gTTS Hindi voiceover.
+Next v2: Add satellite imagery overlay, animated text, better transitions.
+
+What works NOW:
+- POST /video/generate → job_id
+- GET /video/status/{job_id} → {status, duration_seconds, size_mb, script}  
+- GET /video/download/{job_id} → MP4 file
+- Frontend: "📹 वीडियो" tab on /shajra with generate + download
+- gTTS Hindi voiceover: free, no API key
+- FFmpeg mixing: images + audio → MP4
+- Video gen code: /home/rgfoodspvt/land-api/video_gen.py
+
+DB counts to verify nothing was lost:
+- khasra_polygons: 3,688,408 (PostGIS geom ✓)
+- khasra_features: 617,644 (POI distances ✓)
+- land_records_v3: 280,659 (Sonipat parsed ✓)
+- osm_roads: 45,962
+- osm_pois: 347
+
 # ABHIVO AI — CLAUDE CODE WORKING SPECIFICATION
-# Updated: April 2026
+# Updated: April 14, 2026
 # READ THIS ENTIRE FILE BEFORE WRITING ANY CODE.
 
 ---
