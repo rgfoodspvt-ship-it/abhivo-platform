@@ -1,0 +1,741 @@
+'use client';
+import { useEffect, useRef, useState, useCallback } from 'react';
+import { getDistricts, getTehsils, getVillages, getPolygons, lookupKhasra, fetchAPI } from '@/lib/api';
+import ShajraCanvas from '@/components/ShajraCanvas';
+
+interface PolygonFeature {
+  geometry: { coordinates: any; type: string };
+  properties: { khasra_no: string; khewat_no: string; area_acres?: number; village?: string; tehsil?: string; [key: string]: any };
+}
+
+function getRing(f: PolygonFeature): number[][] | null {
+  const g = f.geometry;
+  if (!g?.coordinates) return null;
+  if (g.type === 'MultiPolygon') return g.coordinates[0]?.[0] || null;
+  return g.coordinates[0] || null;
+}
+
+export default function ShajraPage() {
+  const mapRef = useRef<HTMLDivElement>(null);
+  const [mapObj, setMapObj] = useState<any>(null);
+  const [district, setDistrict] = useState('सोनीपत');
+  const [tehsil, setTehsil] = useState('');
+  const [districts, setDistricts] = useState<string[]>([]);
+  const [tehsils, setTehsils] = useState<string[]>([]);
+  const [villageNames, setVillageNames] = useState<string[]>([]);
+  const [selectedVillage, setSelectedVillage] = useState('');
+  const [features, setFeatures] = useState<PolygonFeature[]>([]);
+  const [selected, setSelected] = useState<Map<string, PolygonFeature>>(new Map());
+  const [loading, setLoading] = useState(false);
+  const [loadingStage, setLoadingStage] = useState('');
+  const [showReport, setShowReport] = useState(false);
+  const [selMurabba, setSelMurabba] = useState('');
+  const [ownerData, setOwnerData] = useState<Record<string, any>>({});
+  const [neighborData, setNeighborData] = useState<{name:string;direction:string}[]>([]);
+
+  // Murabba stats from lightweight API
+  const [murabbaList, setMurabbaList] = useState<{murabba:string;khasras:number;acres:number}[]>([]);
+  const filteredKhasras = selMurabba ? features.filter(f => f.properties.khewat_no === selMurabba) : [];
+
+  // Load districts
+  useEffect(() => { getDistricts().then(d => setDistricts(d.districts)); }, []);
+  // Tehsils — filter Hindi only
+  useEffect(() => {
+    if (district) getTehsils(district).then(d => {
+      setTehsils(d.tehsils.filter(t => !/^[A-Za-z]/.test(t)));
+    });
+  }, [district]);
+  // Villages
+  useEffect(() => {
+    if (district && tehsil) getVillages(district, tehsil).then(d => setVillageNames(d.villages));
+  }, [district, tehsil]);
+
+  // Init map
+  useEffect(() => {
+    if (!mapRef.current) return;
+    import('maplibre-gl').then(maplibregl => {
+      const map = new maplibregl.Map({
+        container: mapRef.current!,
+        style: { version: 8, sources: {}, layers: [{ id: 'bg', type: 'background', paint: { 'background-color': '#0F0D0A' } }] },
+        center: [76.9, 29.0], zoom: 8,
+      });
+      map.on('load', () => {
+        // Satellite tiles
+        map.addSource('satellite', { type: 'raster', tiles: [
+          'https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}'
+        ], tileSize: 256, maxzoom: 20 });
+        map.addLayer({ id: 'satellite-layer', type: 'raster', source: 'satellite', paint: { 'raster-opacity': 1 } });
+        // Bhuvan village boundaries
+        map.addSource('bhuvan-vill', { type: 'raster', tiles: [
+          'https://bhuvan-vec1.nrsc.gov.in/bhuvan/wms?service=WMS&version=1.1.1&request=GetMap&layers=basemap:HR_Vill&bbox={bbox-epsg-3857}&width=256&height=256&srs=EPSG:3857&format=image/png&transparent=true'
+        ], tileSize: 256 });
+        map.addLayer({ id: 'bhuvan-vill-layer', type: 'raster', source: 'bhuvan-vill', paint: { 'raster-opacity': 0.3 } });
+        // Bhuvan roads
+        map.addSource('bhuvan-roads', { type: 'raster', tiles: [
+          'https://bhuvan-vec1.nrsc.gov.in/bhuvan/wms?service=WMS&version=1.1.1&request=GetMap&layers=mmi:HR_ROAD_NETWORK_Q4_2022&bbox={bbox-epsg-3857}&width=256&height=256&srs=EPSG:3857&format=image/png&transparent=true'
+        ], tileSize: 256 });
+        map.addLayer({ id: 'bhuvan-roads-layer', type: 'raster', source: 'bhuvan-roads', paint: { 'raster-opacity': 0.35 } });
+      });
+      map.addControl(new maplibregl.NavigationControl(), 'bottom-right');
+      setMapObj(map);
+    });
+  }, []);
+
+  // Zoom to murabba when selected
+  useEffect(() => {
+    if (!mapObj || !selMurabba || !features.length) return;
+    const mFeats = features.filter(f => f.properties.khewat_no === selMurabba);
+    if (!mFeats.length) return;
+    const coords = mFeats.flatMap(f => getRing(f) || []);
+    if (coords.length) {
+      const lngs = coords.map(c => c[0]), lats = coords.map(c => c[1]);
+      mapObj.fitBounds([[Math.min(...lngs), Math.min(...lats)], [Math.max(...lngs), Math.max(...lats)]], { padding: 60, maxZoom: 17 });
+    }
+    // Highlight murabba plots
+    if (mapObj.getLayer('plots-fill')) {
+      mapObj.setPaintProperty('plots-fill', 'fill-color', ['case',
+        ['==', ['get', '_selected'], 1], '#FBBF24',
+        ['get', '_color']
+      ]);
+      mapObj.setPaintProperty('plots-fill', 'fill-opacity', ['case',
+        ['==', ['get', '_selected'], 1], 0.65,
+        ['==', ['get', 'khewat_no'], selMurabba], 0.4,
+        0.08
+      ]);
+    }
+    if (mapObj.getLayer('plots-line')) {
+      mapObj.setPaintProperty('plots-line', 'line-color', ['case',
+        ['==', ['get', '_selected'], 1], '#F59E0B',
+        '#F5F0E8'
+      ]);
+      mapObj.setPaintProperty('plots-line', 'line-width', ['case',
+        ['==', ['get', '_selected'], 1], 4, 2
+      ]);
+      mapObj.setPaintProperty('plots-line', 'line-opacity', ['case',
+        ['==', ['get', '_selected'], 1], 1.0,
+        ['==', ['get', 'khewat_no'], selMurabba], 1, 0.3
+      ]);
+    }
+  }, [selMurabba, mapObj, features]);
+
+  async function loadVillage(vName: string) {
+    if (!mapObj || !vName) return;
+    setSelectedVillage(vName); setLoading(true); setLoadingStage('मुरब्बा सूची लोड हो रही है...'); setSelected(new Map()); setSelMurabba('');
+    try {
+      // Step 1: Load murabba list + neighbors (fast, no geometry)
+      const [mData, nData] = await Promise.all([
+        fetchAPI<{count:number;murabbas:{murabba:string;khasras:number;acres:number}[]}>(`/map/murabbas?village=${encodeURIComponent(vName)}&district=${encodeURIComponent(district)}`).catch(() => ({count:0, murabbas:[]})),
+        fetchAPI<{neighbors:{name:string;direction:string}[]}>(`/map/neighbors?village=${encodeURIComponent(vName)}&district=${encodeURIComponent(district)}`).catch(() => ({neighbors:[]})),
+      ]);
+      setMurabbaList(mData.murabbas || []);
+      setNeighborData(nData.neighbors || []);
+
+      // Step 2: Load polygons (slower)
+      setLoadingStage('भूखंड नक्शे लोड हो रहे हैं...');
+      const data = await getPolygons(vName, district);
+      // Filter: if polygons span too wide (>0.05° = ~5km), keep only the largest cluster
+      let filteredFeats = data.features;
+      if (filteredFeats.length > 10) {
+        const centroids = filteredFeats.map((f: any) => {
+          const ring = f.geometry?.type === 'MultiPolygon' ? f.geometry.coordinates[0]?.[0] : f.geometry?.coordinates?.[0];
+          if (!ring) return [0, 0];
+          return [ring.reduce((s: number, c: number[]) => s + c[0], 0) / ring.length, ring.reduce((s: number, c: number[]) => s + c[1], 0) / ring.length];
+        });
+        const lngs = centroids.map((c: number[]) => c[0]).filter((v: number) => v > 0);
+        const lngSpan = Math.max(...lngs) - Math.min(...lngs);
+        if (lngSpan > 0.05) {
+          // Find the median longitude — majority cluster
+          const sorted = [...lngs].sort((a, b) => a - b);
+          const medLng = sorted[Math.floor(sorted.length / 2)];
+          filteredFeats = filteredFeats.filter((_: any, i: number) => Math.abs(centroids[i][0] - medLng) < 0.02);
+        }
+      }
+      setFeatures(filteredFeats);
+
+      setLoadingStage('नक्शा बना रहे हैं...');
+      mapObj.resize();
+
+      // Remove old layers
+      ['sel-labels', 'sel-line', 'sel-fill', 'sel-glow', 'plots-labels', 'plots-line', 'plots-fill'].forEach(l => { if (mapObj.getLayer(l)) mapObj.removeLayer(l); });
+      if (mapObj.getSource('selected-plots')) mapObj.removeSource('selected-plots');
+      if (mapObj.getSource('plots')) mapObj.removeSource('plots');
+
+      // Add color property — amber palette
+      const mColors = ['#F59E0B','#FBBF24','#B47708','#D4A017','#E8B810','#C49A08','#DBA520','#F0C420',
+        '#E8A317','#D4940A','#F5B50B','#C8A208','#E0B020','#D09010','#F0A808','#C4A010'];
+      const coloredFeatures = data.features.map((f: PolygonFeature) => {
+        let h = 0;
+        const m = f.properties.khewat_no || '0';
+        for (let i = 0; i < m.length; i++) h = (h * 31 + m.charCodeAt(i)) & 0xffff;
+        return { ...f, properties: { ...f.properties, _color: mColors[h % mColors.length] } };
+      });
+
+      mapObj.addSource('plots', { type: 'geojson', data: { type: 'FeatureCollection', features: coloredFeatures } });
+
+      // Plot fill
+      mapObj.addLayer({ id: 'plots-fill', type: 'fill', source: 'plots', paint: {
+        'fill-color': ['case', ['==', ['get', '_selected'], 1], '#FBBF24', ['get', '_color']],
+        'fill-opacity': ['case', ['==', ['get', '_selected'], 1], 0.6, 0.25]
+      }});
+
+      // Plot borders — cream/amber
+      mapObj.addLayer({ id: 'plots-line', type: 'line', source: 'plots', paint: {
+        'line-color': ['case', ['==', ['get', '_selected'], 1], '#F59E0B', '#F5F0E8'],
+        'line-width': ['case', ['==', ['get', '_selected'], 1], 4, 1.5],
+        'line-opacity': ['case', ['==', ['get', '_selected'], 1], 1.0, 0.7]
+      }});
+
+      // Labels — murabba//khasra
+      mapObj.addLayer({ id: 'plots-labels', type: 'symbol', source: 'plots',
+        layout: {
+          'text-field': ['concat', ['get', 'khewat_no'], '//', ['get', 'khasra_no']],
+          'text-size': ['interpolate', ['linear'], ['zoom'], 13, 7, 16, 11, 18, 15],
+          'text-allow-overlap': false,
+        },
+        paint: {
+          'text-color': '#F5F0E8',
+          'text-halo-color': 'rgba(15,13,10,0.8)',
+          'text-halo-width': 1.5,
+        }
+      });
+
+      // Fit bounds
+      try {
+        const coords = data.features.flatMap((f: PolygonFeature) => {
+          const c = f.geometry?.coordinates;
+          if (!c) return [];
+          return f.geometry.type === 'MultiPolygon' ? c.flat(1).flat(0) : c[0] || [];
+        }).filter((c: number[]) => Array.isArray(c) && c.length >= 2 && isFinite(c[0]) && isFinite(c[1]));
+        if (coords.length) {
+          const lngs = coords.map((c: number[]) => c[0]), lats = coords.map((c: number[]) => c[1]);
+          mapObj.fitBounds([[Math.min(...lngs), Math.min(...lats)], [Math.max(...lngs), Math.max(...lats)]], { padding: 50 });
+        }
+      } catch (e) { console.warn('fitBounds:', e); }
+
+      // Field paths — background load
+      setTimeout(async () => { try {
+        const pathData = await fetchAPI<{count:number;paths:{from:string;to:string;width_karam:number;coords:number[][];type:string}[]}>(`/map/paths?village=${encodeURIComponent(vName)}&district=${encodeURIComponent(district)}`);
+        if (pathData.paths.length) {
+          ['field-paths-wide','field-paths-line','field-paths-labels'].forEach(l => { if (mapObj.getLayer(l)) mapObj.removeLayer(l); });
+          if (mapObj.getSource('field-paths')) mapObj.removeSource('field-paths');
+          const pathFeatures = pathData.paths.map(p => ({
+            type: 'Feature' as const,
+            geometry: { type: 'LineString' as const, coordinates: p.coords },
+            properties: { label: p.type + ' (' + p.width_karam + ' क॰)', width: p.width_karam, type: p.type }
+          }));
+          mapObj.addSource('field-paths', { type: 'geojson', data: { type: 'FeatureCollection', features: pathFeatures } });
+          mapObj.addLayer({ id: 'field-paths-wide', type: 'line', source: 'field-paths', paint: {
+            'line-color': ['case', ['<=', ['get', 'width'], 3], '#d4a574', ['<=', ['get', 'width'], 6], '#c4956a', '#a07850'],
+            'line-width': ['interpolate', ['linear'], ['get', 'width'], 1, 3, 4, 6, 8, 10],
+            'line-opacity': 0.4
+          }}, 'plots-fill');
+          mapObj.addLayer({ id: 'field-paths-line', type: 'line', source: 'field-paths', paint: {
+            'line-color': '#B47708', 'line-width': 1, 'line-dasharray': [3, 3], 'line-opacity': 0.6
+          }}, 'plots-fill');
+          mapObj.addLayer({ id: 'field-paths-labels', type: 'symbol', source: 'field-paths',
+            layout: { 'text-field': ['get', 'label'], 'text-size': 9, 'symbol-placement': 'line', 'text-allow-overlap': false },
+            paint: { 'text-color': '#D4A574', 'text-halo-color': 'rgba(15,13,10,0.7)', 'text-halo-width': 1 }
+          });
+        }
+      } catch (e) { console.log('Paths:', e); } }, 100);
+
+      // Selected plots highlight layer
+      mapObj.addSource('selected-plots', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+      mapObj.addLayer({ id: 'sel-glow', type: 'line', source: 'selected-plots', paint: {
+        'line-color': '#F59E0B', 'line-width': 6, 'line-opacity': 0.3, 'line-blur': 4
+      }});
+      mapObj.addLayer({ id: 'sel-fill', type: 'fill', source: 'selected-plots', paint: {
+        'fill-color': '#FBBF24', 'fill-opacity': 0.6
+      }});
+      mapObj.addLayer({ id: 'sel-line', type: 'line', source: 'selected-plots', paint: {
+        'line-color': '#F59E0B', 'line-width': 4, 'line-opacity': 1.0
+      }});
+      mapObj.addLayer({ id: 'sel-labels', type: 'symbol', source: 'selected-plots',
+        layout: {
+          'text-field': ['concat', ['get', 'khewat_no'], '//', ['get', 'khasra_no']],
+          'text-size': 14, 'text-allow-overlap': true, 'text-font': ['Open Sans Bold'],
+        },
+        paint: { 'text-color': '#F59E0B', 'text-halo-color': 'rgba(15,13,10,0.9)', 'text-halo-width': 2 }
+      });
+
+      // Click handler
+      if ((mapObj as any)._shajraClick) {
+        try { mapObj.off('click', 'plots-fill', (mapObj as any)._shajraClick); } catch {}
+      }
+      if ((mapObj as any)._shajraEnter) {
+        try { mapObj.off('mouseenter', 'plots-fill', (mapObj as any)._shajraEnter); } catch {}
+      }
+      if ((mapObj as any)._shajraLeave) {
+        try { mapObj.off('mouseleave', 'plots-fill', (mapObj as any)._shajraLeave); } catch {}
+      }
+
+      const clickHandler = (e: any) => {
+        let f = e.features?.[0];
+        if (!f?.properties) {
+          const bbox: [any, any] = [[e.point.x - 5, e.point.y - 5], [e.point.x + 5, e.point.y + 5]];
+          const hits = mapObj.queryRenderedFeatures(bbox, { layers: ['plots-fill'] });
+          f = hits?.[0];
+        }
+        if (!f?.properties) return;
+        const ck = String(f.properties.khasra_no ?? '');
+        const cm = String(f.properties.khewat_no ?? '');
+        if (!ck || !cm || ck === 'undefined' || cm === 'undefined') return;
+        const key = ck + '_' + cm;
+        setSelected(prev => {
+          const n = new Map(prev);
+          if (n.has(key)) n.delete(key); else {
+            const full = data.features.find((ff: PolygonFeature) =>
+              String(ff.properties.khasra_no) === ck && String(ff.properties.khewat_no) === cm);
+            if (full) n.set(key, full);
+          }
+          return n;
+        });
+      };
+      (mapObj as any)._shajraClick = clickHandler;
+      mapObj.on('click', 'plots-fill', clickHandler);
+
+      const enterHandler = () => { mapObj.getCanvas().style.cursor = 'pointer'; };
+      const leaveHandler = () => { mapObj.getCanvas().style.cursor = ''; };
+      (mapObj as any)._shajraEnter = enterHandler;
+      (mapObj as any)._shajraLeave = leaveHandler;
+      mapObj.on('mouseenter', 'plots-fill', enterHandler);
+      mapObj.on('mouseleave', 'plots-fill', leaveHandler);
+
+      // Popup on hover
+      const popup = new (await import('maplibre-gl')).Popup({ closeButton: false, closeOnClick: false, offset: 10 });
+      mapObj.on('mousemove', 'plots-fill', (e: any) => {
+        const f = e.features?.[0];
+        if (!f) return;
+        const a = parseFloat(f.properties.area_acres) || 0;
+        const k = Math.floor(a * 8), m = Math.round((a * 8 % 1) * 20);
+        const key = f.properties.khasra_no + '_' + f.properties.khewat_no;
+        popup.setLngLat(e.lngLat).setHTML(
+          `<div style="font-size:12px;line-height:1.4;background:#1A1714;color:#F5F0E8;padding:8px 12px;border-radius:8px;border:1px solid rgba(245,158,11,0.15)">
+            <strong style="color:#F59E0B">${f.properties.khewat_no}//${f.properties.khasra_no}</strong><br>
+            ${k} कनाल ${m} मरला<br>
+            <span style="color:#9C8F7D;font-size:10px">${selected.has(key) ? '✓ चयनित' : 'क्लिक करें'}</span>
+          </div>`
+        ).addTo(mapObj);
+      });
+      mapObj.on('mouseleave', 'plots-fill', () => popup.remove());
+    } catch (e) { console.error(e); }
+    setLoading(false);
+  }
+
+  // Select khasra from dropdown
+  function selectKhasra(khasraNo: string) {
+    if (!khasraNo || !selMurabba) return;
+    const key = khasraNo + '_' + selMurabba;
+    const feat = features.find(f => f.properties.khasra_no === khasraNo && f.properties.khewat_no === selMurabba);
+    if (feat) {
+      setSelected(prev => { const n = new Map(prev); n.set(key, feat); return n; });
+      if (mapObj && feat.geometry) {
+        const coords = getRing(feat) || [];
+        const lngs = coords.map(c => c[0]), lats = coords.map(c => c[1]);
+        mapObj.fitBounds([[Math.min(...lngs), Math.min(...lats)], [Math.max(...lngs), Math.max(...lats)]], { padding: 80, maxZoom: 18 });
+      }
+    }
+  }
+
+  // V3 enriched data for shajra report
+  const [v3Data, setV3Data] = useState<{plots: any[]; acquired: string[]}>({plots: [], acquired: []});
+
+  // Generate report — fetch V3 data + owners
+  async function generateReport() {
+    setShowReport(true);
+    const plots = [...selected.values()];
+
+    // Fetch V3 enriched data (owners, land type, mutations, acquired status)
+    const murabbas = [...new Set(plots.map(f => f.properties.khewat_no))].join(',');
+    try {
+      const v3 = await fetchAPI<{plots: any[]; acquired: string[]}>(`/map/shajra-data?village=${encodeURIComponent(selectedVillage)}&district=${encodeURIComponent(district)}&murabbas=${encodeURIComponent(murabbas)}`);
+      setV3Data(v3);
+    } catch (e) { console.warn('V3 data fetch failed:', e); }
+
+    // Also fetch individual owner data (fallback)
+    const owners: Record<string, any> = {};
+    for (let i = 0; i < plots.length; i += 5) {
+      const batch = plots.slice(i, i + 5);
+      await Promise.all(batch.map(async f => {
+        const key = f.properties.khasra_no + '_' + f.properties.khewat_no;
+        try {
+          const data = await lookupKhasra(f.properties.khasra_no, f.properties.tehsil || tehsil, f.properties.village || selectedVillage, f.properties.khewat_no);
+          if (data.found && data.results?.length) owners[key] = data.results[0];
+        } catch {}
+      }));
+      setOwnerData({ ...owners });
+    }
+  }
+
+  // Update map selection highlight
+  useEffect(() => {
+    if (!mapObj) return;
+    const selSrc = mapObj.getSource('selected-plots') as any;
+    if (selSrc) {
+      selSrc.setData({ type: 'FeatureCollection', features: [...selected.values()] });
+    }
+    const plotsSrc = mapObj.getSource('plots') as any;
+    if (!plotsSrc) return;
+    const selKeys = new Set([...selected.keys()]);
+    const mColors = ['#F59E0B','#FBBF24','#B47708','#D4A017','#E8B810','#C49A08','#DBA520','#F0C420',
+      '#E8A317','#D4940A','#F5B50B','#C8A208','#E0B020','#D09010','#F0A808','#C4A010'];
+    const updatedFeatures = features.map(f => {
+      let h = 0;
+      const m = f.properties.khewat_no || '0';
+      for (let i = 0; i < m.length; i++) h = (h * 31 + m.charCodeAt(i)) & 0xffff;
+      const key = f.properties.khasra_no + '_' + f.properties.khewat_no;
+      return { ...f, properties: { ...f.properties, _color: mColors[h % mColors.length], _selected: selKeys.has(key) ? 1 : 0 } };
+    });
+    plotsSrc.setData({ type: 'FeatureCollection', features: updatedFeatures });
+    if (mapObj.getLayer('plots-fill')) {
+      mapObj.setPaintProperty('plots-fill', 'fill-color', ['case',
+        ['==', ['get', '_selected'], 1], '#FBBF24', ['get', '_color']
+      ]);
+      mapObj.setPaintProperty('plots-fill', 'fill-opacity', ['case',
+        ['==', ['get', '_selected'], 1], 0.65,
+        selMurabba ? ['case', ['==', ['get', 'khewat_no'], selMurabba], 0.4, 0.08] : 0.25
+      ]);
+    }
+    if (mapObj.getLayer('plots-line')) {
+      mapObj.setPaintProperty('plots-line', 'line-color', ['case',
+        ['==', ['get', '_selected'], 1], '#F59E0B', '#F5F0E8'
+      ]);
+      mapObj.setPaintProperty('plots-line', 'line-width', ['case',
+        ['==', ['get', '_selected'], 1], 4, 2
+      ]);
+      mapObj.setPaintProperty('plots-line', 'line-opacity', ['case',
+        ['==', ['get', '_selected'], 1], 1.0,
+        selMurabba ? ['case', ['==', ['get', 'khewat_no'], selMurabba], 1, 0.3] : 0.7
+      ]);
+    }
+  }, [selected, mapObj, features, selMurabba]);
+
+  const selectedPlots = [...selected.values()];
+  const selectedMurabbas = new Set(selectedPlots.map(f => f.properties.khewat_no));
+  const reportFeatures = features.filter(f => selectedMurabbas.has(f.properties.khewat_no));
+  const totalAcres = selectedPlots.reduce((s, f) => s + (f.properties.area_acres || 0), 0);
+  const selectedByMurabba = selectedPlots.reduce((acc, f) => {
+    const m = f.properties.khewat_no;
+    if (!acc[m]) acc[m] = [];
+    acc[m].push(f);
+    return acc;
+  }, {} as Record<string, PolygonFeature[]>);
+
+  // Glass style for sidebar elements
+  const dd: React.CSSProperties = {
+    width: '100%', padding: '10px 14px', borderRadius: 10, fontSize: 13,
+    background: 'rgba(26,23,20,0.9)', color: '#F5F0E8',
+    border: '1px solid rgba(245,158,11,0.1)', outline: 'none',
+    fontFamily: "'Noto Sans Devanagari', 'Inter', sans-serif", fontWeight: 500,
+  };
+
+  return (
+    <div style={{ display: 'flex', height: 'calc(100vh - 60px)' }}>
+      {/* ===== SIDEBAR ===== */}
+      <div style={{
+        width: '38%', minWidth: 340, maxWidth: 480, flexShrink: 0,
+        background: 'rgba(15,13,10,0.95)', borderRight: '1px solid rgba(245,158,11,0.08)',
+        overflowY: 'auto', backdropFilter: 'blur(12px)',
+      }}>
+        {/* Header + Dropdowns */}
+        <div style={{ padding: '20px 20px 16px', borderBottom: '1px solid rgba(245,158,11,0.06)' }}>
+          <h2 style={{ fontSize: 18, fontWeight: 700, color: '#F5F0E8', marginBottom: 4 }}>
+            <span style={{ color: '#F59E0B' }}>Shajra</span> · शजरा किश्तवार
+          </h2>
+          <p style={{ fontSize: 11, color: '#9C8F7D', marginBottom: 16 }}>भूखंड चुनें और शजरा नक्शा बनाएं</p>
+
+          <select value={district} onChange={e => { setDistrict(e.target.value); setTehsil(''); setSelectedVillage(''); setFeatures([]); }} style={{ ...dd, marginBottom: 8 }}>
+            <option value="">District · जिला</option>
+            {districts.map(d => <option key={d} value={d}>{d}</option>)}
+          </select>
+          <select value={tehsil} onChange={e => { setTehsil(e.target.value); setSelectedVillage(''); setFeatures([]); }} style={{ ...dd, marginBottom: 8 }} disabled={!district}>
+            <option value="">Tehsil · तहसील</option>
+            {tehsils.map(t => <option key={t} value={t}>{t}</option>)}
+          </select>
+          <select value={selectedVillage} onChange={e => loadVillage(e.target.value)} style={{ ...dd, marginBottom: 8 }} disabled={!tehsil}>
+            <option value="">Village · गाँव ({villageNames.length})</option>
+            {villageNames.map(v => <option key={v} value={v}>{v}</option>)}
+          </select>
+
+          {loading && (
+            <div style={{ textAlign: 'center', padding: '16px 0' }}>
+              <div style={{ width: 20, height: 20, border: '2px solid #F59E0B', borderTopColor: 'transparent', borderRadius: '50%', margin: '0 auto 8px', animation: 'spin 1s linear infinite' }} />
+              <p style={{ fontSize: 12, color: '#9C8F7D' }}>{loadingStage}</p>
+              {[1,2,3].map(i => <div key={i} style={{ height: 28, background: 'rgba(245,158,11,0.04)', borderRadius: 6, marginTop: 6 }} className="shimmer" />)}
+            </div>
+          )}
+        </div>
+
+        {/* Murabba + Khasra filter */}
+        {features.length > 0 && (
+          <div style={{ padding: '16px 20px', borderBottom: '1px solid rgba(245,158,11,0.06)' }}>
+            <label style={{ fontSize: 10, fontWeight: 700, color: '#9C8F7D', textTransform: 'uppercase', letterSpacing: '0.08em', display: 'block', marginBottom: 8 }}>Filter · फ़िल्टर</label>
+            <select value={selMurabba} onChange={e => setSelMurabba(e.target.value)} style={{ ...dd, marginBottom: 8 }}>
+              <option value="">मुरब्बा चुनें ({murabbaList.length})</option>
+              {murabbaList.map(m => (
+                <option key={m.murabba} value={m.murabba}>
+                  मुरब्बा {m.murabba} — {m.khasras} खसरे · {Math.floor(m.acres*8)} कनाल {Math.round((m.acres*8%1)*20)} मरला
+                </option>
+              ))}
+            </select>
+            {selMurabba && (
+              <select onChange={e => selectKhasra(e.target.value)} defaultValue="" style={dd}>
+                <option value="">खसरा चुनें ({filteredKhasras.length})</option>
+                {filteredKhasras.map(f => {
+                  const a = f.properties.area_acres || 0;
+                  const kanal = Math.floor(a * 8), marla = Math.round((a * 8 % 1) * 20);
+                  const key = f.properties.khasra_no + '_' + f.properties.khewat_no;
+                  const isSelected = selected.has(key);
+                  return (
+                    <option key={f.properties.khasra_no} value={f.properties.khasra_no}>
+                      {isSelected ? '✓ ' : '  '}{selMurabba}//{f.properties.khasra_no} — {kanal} कनाल {marla} मरला
+                    </option>
+                  );
+                })}
+              </select>
+            )}
+          </div>
+        )}
+
+        {/* Selected plots */}
+        <div style={{ padding: '16px 20px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+            <label style={{ fontSize: 10, fontWeight: 700, color: '#9C8F7D', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Selected · चयनित</label>
+            {selected.size > 0 && (
+              <button onClick={() => setSelected(new Map())} style={{ fontSize: 11, color: '#9C8F7D', background: 'none', border: 'none', cursor: 'pointer' }}>Clear all</button>
+            )}
+          </div>
+
+          {selected.size > 0 ? (
+            <>
+              {/* Generate button */}
+              <button onClick={generateReport} style={{
+                width: '100%', padding: '14px 0', fontWeight: 700, fontSize: 16, borderRadius: 12, border: 'none', cursor: 'pointer',
+                background: 'linear-gradient(135deg, #F59E0B, #FBBF24)', color: '#0F0D0A',
+                boxShadow: '0 4px 20px rgba(245,158,11,0.25)', marginBottom: 16,
+              }}>
+                शजरा नक्शा बनाएं · Generate Shajra
+              </button>
+
+              {/* Stats */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 12 }}>
+                <div style={{ background: 'rgba(245,158,11,0.06)', borderRadius: 10, padding: '10px 12px', textAlign: 'center', border: '1px solid rgba(245,158,11,0.1)' }}>
+                  <div style={{ fontSize: 22, fontWeight: 700, color: '#F59E0B' }}>{selected.size}</div>
+                  <div style={{ fontSize: 9, color: '#9C8F7D', textTransform: 'uppercase' }}>भूखंड · Plots</div>
+                </div>
+                <div style={{ background: 'rgba(245,158,11,0.06)', borderRadius: 10, padding: '10px 12px', textAlign: 'center', border: '1px solid rgba(245,158,11,0.1)' }}>
+                  <div style={{ fontSize: 22, fontWeight: 700, color: '#F59E0B' }}>{Math.floor(totalAcres * 8)} कनाल {Math.round((totalAcres * 8 % 1) * 20)} मरला</div>
+                  <div style={{ fontSize: 9, color: '#9C8F7D', textTransform: 'uppercase' }}>कुल क्षेत्रफल</div>
+                </div>
+              </div>
+
+              {/* Selected plots grouped by murabba */}
+              <div style={{ maxHeight: 260, overflowY: 'auto' }}>
+                {Object.entries(selectedByMurabba).sort(([a], [b]) => (parseInt(a) || 0) - (parseInt(b) || 0)).map(([m, plots]) => {
+                  const mAcres = plots.reduce((s, f) => s + (f.properties.area_acres || 0), 0);
+                  const mKanal = Math.floor(mAcres * 8), mMarla = Math.round((mAcres * 8 % 1) * 20);
+                  return (
+                    <div key={m} style={{ marginBottom: 8 }}>
+                      <div style={{ fontSize: 10, fontWeight: 700, color: '#F59E0B', marginBottom: 4, fontFamily: 'monospace' }}>
+                        मुरब्बा {m} · {plots.length} भूखंड · {mKanal} कनाल {mMarla} मरला
+                      </div>
+                      {plots.map(f => {
+                        const key = f.properties.khasra_no + '_' + f.properties.khewat_no;
+                        const a = f.properties.area_acres || 0;
+                        const kanal = Math.floor(a * 8), marla = Math.round((a * 8 % 1) * 20);
+                        return (
+                          <div key={key} style={{
+                            display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                            background: 'rgba(26,23,20,0.8)', borderRadius: 6, padding: '6px 10px', fontSize: 12, marginBottom: 2,
+                            border: '1px solid rgba(245,158,11,0.04)',
+                          }}>
+                            <span>
+                              <span style={{ color: '#F59E0B', fontWeight: 700 }}>{m}//{f.properties.khasra_no}</span>
+                              <span style={{ color: '#9C8F7D', marginLeft: 8 }}>{kanal} कनाल {marla} मरला</span>
+                            </span>
+                            <button onClick={() => setSelected(prev => { const n = new Map(prev); n.delete(key); return n; })}
+                              style={{ color: '#9C8F7D', background: 'none', border: 'none', cursor: 'pointer', fontSize: 12 }}>✕</button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })}
+              </div>
+            </>
+          ) : (
+            <p style={{ fontSize: 12, color: '#9C8F7D', textAlign: 'center', padding: '20px 0' }}>
+              नक्शे पर भूखंड चुनें<br />या ऊपर मुरब्बा → खसरा फ़िल्टर करें
+            </p>
+          )}
+        </div>
+      </div>
+
+      {/* ===== MAP ===== */}
+      <div style={{ flex: 1, position: 'relative', minHeight: '100%' }}>
+        <div ref={mapRef} style={{ width: '100%', height: '100%', position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }} />
+
+        {/* Village badge */}
+        {selectedVillage && (
+          <div style={{
+            position: 'absolute', top: 12, left: 12, zIndex: 10,
+            padding: '8px 16px', borderRadius: 10,
+            background: 'rgba(15,13,10,0.85)', backdropFilter: 'blur(12px)',
+            border: '1px solid rgba(245,158,11,0.1)',
+          }}>
+            <div style={{ fontWeight: 700, color: '#F5F0E8', fontSize: 14 }}>शजरा — {selectedVillage}</div>
+            <div style={{ fontSize: 10, color: '#9C8F7D' }}>{tehsil} · {district} · {features.length} plots</div>
+          </div>
+        )}
+
+        {/* Selected count badge */}
+        {selected.size > 0 && (
+          <div style={{
+            position: 'absolute', bottom: 16, left: 12, zIndex: 10,
+            padding: '10px 18px', borderRadius: 10,
+            background: 'linear-gradient(135deg, #F59E0B, #FBBF24)',
+            color: '#0F0D0A', fontWeight: 700, fontSize: 13,
+            boxShadow: '0 4px 16px rgba(245,158,11,0.3)',
+          }}>
+            {selected.size} भूखंड · {Math.floor(totalAcres*8)} कनाल {Math.round((totalAcres*8%1)*20)} मरला
+          </div>
+        )}
+      </div>
+
+      {/* ===== REPORT OVERLAY ===== */}
+      {showReport && (
+        <div style={{ position: 'fixed', inset: 0, zIndex: 50, background: '#fff', overflowY: 'auto', color: '#333' }}>
+          {/* Report header */}
+          <div className="no-print" style={{
+            position: 'sticky', top: 0, zIndex: 10,
+            display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+            padding: '10px 24px',
+            background: '#0F0D0A', borderBottom: '2px solid #F59E0B',
+          }}>
+            <span style={{ fontWeight: 700, color: '#F59E0B', fontSize: 15 }}>शजरा Report — {selectedVillage}</span>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button onClick={() => window.print()} style={{ padding: '8px 20px', borderRadius: 8, background: '#F59E0B', color: '#0F0D0A', fontWeight: 700, border: 'none', cursor: 'pointer', fontSize: 13 }}>Print</button>
+              <button onClick={() => setShowReport(false)} style={{ padding: '8px 20px', borderRadius: 8, background: '#333', color: '#fff', fontWeight: 700, border: 'none', cursor: 'pointer', fontSize: 13 }}>Close</button>
+            </div>
+          </div>
+
+          <div style={{ maxWidth: 1000, margin: '0 auto', padding: '32px' }}>
+            {/* Header */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', borderBottom: '2px solid #F59E0B', paddingBottom: 16, marginBottom: 24 }}>
+              <div>
+                <h1 style={{ fontSize: 24, fontWeight: 800, margin: 0 }}>
+                  <span style={{ color: '#F59E0B' }}>Abhivo</span><span style={{ color: '#333' }}> AI</span>
+                </h1>
+                <div style={{ fontSize: 10, color: '#555', letterSpacing: '0.15em' }}>LAND · LEGACY · GROWTH</div>
+              </div>
+              <div style={{ textAlign: 'center', flex: 1 }}>
+                <h2 style={{ fontSize: 22, fontWeight: 700, color: '#333', margin: 0 }}>शजरा नक्शा · Shajra Report</h2>
+              </div>
+              <div style={{ textAlign: 'right', fontSize: 11, color: '#555' }}>
+                <div>{new Date().toLocaleDateString('en-IN')}</div>
+                <div>{selected.size} plots</div>
+              </div>
+            </div>
+
+            {/* Village info */}
+            <div style={{ display: 'flex', gap: 32, background: 'rgba(245,158,11,0.06)', border: '1px solid rgba(245,158,11,0.2)', borderRadius: 10, padding: '12px 24px', marginBottom: 24, fontSize: 14, fontWeight: 600, color: '#333' }}>
+              <span><span style={{ color: '#8B5E00' }}>गाँव:</span> {selectedVillage}</span>
+              <span><span style={{ color: '#8B5E00' }}>तहसील:</span> {tehsil}</span>
+              <span><span style={{ color: '#8B5E00' }}>जिला:</span> {district}</span>
+            </div>
+
+            {/* Shajra Map — Rough.js hand-drawn */}
+            <div style={{ border: '2px solid #F59E0B', borderRadius: 10, overflow: 'hidden', marginBottom: 24 }}>
+              <div style={{ background: 'rgba(245,158,11,0.06)', padding: '10px 16px', fontSize: 13, fontWeight: 700, color: '#8B5E00', borderBottom: '1px solid rgba(245,158,11,0.15)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span>भूखंड नक्शा · शजरा किश्तवार</span>
+                <span style={{ fontSize: 11, fontWeight: 400, color: '#555' }}>मुरब्बा {[...new Set(selectedPlots.map(f => f.properties.khewat_no))].join(', ')}</span>
+              </div>
+              <ShajraCanvas
+                features={reportFeatures}
+                selectedKeys={new Set(selected.keys())}
+                village={selectedVillage}
+                tehsil={tehsil}
+                district={district}
+                v3Data={v3Data}
+              />
+            </div>
+
+            {/* Stats */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 24 }}>
+              {[
+                { v: selected.size, l: 'चयनित भूखंड' },
+                { v: `${Math.floor(totalAcres * 8)} कनाल ${Math.round((totalAcres * 8 % 1) * 20)} मरला`, l: 'कुल क्षेत्रफल' },
+                { v: totalAcres.toFixed(2), l: 'एकड़' },
+                { v: Math.round(totalAcres * 4840).toLocaleString(), l: 'वर्ग गज' },
+              ].map(s => (
+                <div key={s.l} style={{ background: 'rgba(245,158,11,0.04)', border: '1px solid rgba(245,158,11,0.2)', borderRadius: 10, padding: 14, textAlign: 'center' }}>
+                  <div style={{ fontSize: 22, fontWeight: 700, color: '#8B5E00' }}>{s.v}</div>
+                  <div style={{ fontSize: 9, color: '#555', textTransform: 'uppercase', letterSpacing: '0.08em' }}>{s.l}</div>
+                </div>
+              ))}
+            </div>
+
+            {/* Table grouped by murabba */}
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, marginBottom: 24 }}>
+              <thead>
+                <tr style={{ background: 'rgba(245,158,11,0.06)' }}>
+                  {['#', 'मुरब्बा//खसरा', 'कनाल-मरला', 'एकड़', 'वर्ग गज', 'खेवट', 'मालिक'].map(h => (
+                    <th key={h} style={{ border: '2px solid #F59E0B', padding: '8px 12px', color: '#8B5E00', fontWeight: 700, fontSize: 11, textAlign: 'center' }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {Object.entries(selectedByMurabba).sort(([a], [b]) => (parseInt(a) || 0) - (parseInt(b) || 0)).map(([m, plots]) => {
+                  const mAcres = plots.reduce((s, f) => s + (f.properties.area_acres || 0), 0);
+                  return [
+                    <tr key={`h-${m}`}>
+                      <td colSpan={7} style={{ background: 'rgba(245,158,11,0.06)', fontWeight: 700, color: '#8B5E00', fontSize: 11, padding: '8px 12px', border: '1px solid rgba(245,158,11,0.2)' }}>
+                        मुरब्बा {m} — {plots.length} भूखंड · {Math.floor(mAcres*8)} कनाल {Math.round((mAcres*8%1)*20)} मरला
+                      </td>
+                    </tr>,
+                    ...plots.map((f, i) => {
+                      const a = f.properties.area_acres || 0;
+                      const key = f.properties.khasra_no + '_' + f.properties.khewat_no;
+                      const owner = ownerData[key];
+                      // Also check V3 data for owners
+                      const v3Plots = v3Data?.plots?.filter(p => p.murabba === f.properties.khewat_no && f.properties.khasra_no.startsWith(p.khasra.split('/')[0])) || [];
+                      const v3Owner = v3Plots.map(p => p.owners).filter(Boolean).join(', ').substring(0, 60);
+                      const v3Khewat = v3Plots[0]?.khewat || '';
+                      const displayOwner = owner?.owners?.slice(0, 50) || v3Owner || '—';
+                      const displayKhewat = owner?.khewat || v3Khewat || '—';
+                      return (
+                        <tr key={key} style={{ background: i % 2 ? 'rgba(245,158,11,0.02)' : 'transparent' }}>
+                          <td style={{ border: '1px solid #ddd', padding: '6px 8px', textAlign: 'center', fontSize: 11 }}>{i + 1}</td>
+                          <td style={{ border: '1px solid #ddd', padding: '6px 8px', textAlign: 'center', fontWeight: 700 }}>
+                            <span style={{ color: '#B47708' }}>{m}//</span>{f.properties.khasra_no}
+                          </td>
+                          <td style={{ border: '1px solid #ddd', padding: '6px 8px', textAlign: 'right', fontWeight: 600 }}>{Math.floor(a * 8)}-{Math.round((a * 8 % 1) * 20)}</td>
+                          <td style={{ border: '1px solid #ddd', padding: '6px 8px', textAlign: 'right', color: '#555' }}>{a.toFixed(3)}</td>
+                          <td style={{ border: '1px solid #ddd', padding: '6px 8px', textAlign: 'right' }}>{Math.round(a * 4840).toLocaleString()}</td>
+                          <td style={{ border: '1px solid #ddd', padding: '6px 8px', textAlign: 'center', fontWeight: 600 }}>{displayKhewat}</td>
+                          <td style={{ border: '1px solid #ddd', padding: '6px 8px', fontSize: 11, color: '#333' }}>{displayOwner}</td>
+                        </tr>
+                      );
+                    })
+                  ];
+                })}
+              </tbody>
+            </table>
+
+            {/* Footer */}
+            <div style={{ borderTop: '1px solid #eee', paddingTop: 16, display: 'flex', justifyContent: 'space-between', fontSize: 11, color: '#666' }}>
+              <span>Abhivo AI · HSAC EODB + WebHALRIS + Bhuvan ISRO</span>
+              <span>{selectedVillage} · {district}</span>
+            </div>
+            <div style={{ fontSize: 9, color: '#ccc', marginTop: 8 }}>
+              यह शजरा केवल सूचनार्थ है। सरकारी कार्य हेतु सम्बंधित तहसील में सम्पर्क करें।
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Keyframes */}
+      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+    </div>
+  );
+}

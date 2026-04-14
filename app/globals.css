@@ -1,26 +1,138 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Noto+Sans+Devanagari:wght@400;500;600;700&display=swap');
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --bg-primary: #0F0D0A;
+  --bg-card: #1A1714;
+  --bg-elevated: #231F1A;
+  --text-primary: #F5F0E8;
+  --text-muted: #9C8F7D;
+  --accent: #F59E0B;
+  --accent-light: #FBBF24;
+  --accent-dim: #B47708;
+  --accent-blue: #58A6FF;
+  --success: #56D364;
+  --warning: #F59E0B;
+  --danger: #EF4444;
+  --border: rgba(245, 158, 11, 0.06);
+  --glass-bg: rgba(26, 23, 20, 0.85);
+  --glass-border: rgba(245, 158, 11, 0.08);
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+  --color-background: var(--bg-primary);
+  --color-foreground: var(--text-primary);
+  --font-sans: 'Inter', var(--font-geist-sans), sans-serif;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  line-height: 1.7;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Glass card */
+.glass {
+  background: var(--glass-bg);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid var(--glass-border);
+  border-radius: 16px;
+}
+
+.glass-sm {
+  background: var(--glass-bg);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid var(--glass-border);
+  border-radius: 12px;
+}
+
+/* Amber gradient text */
+.text-gold-gradient {
+  background: linear-gradient(135deg, #F59E0B, #FBBF24, #F59E0B);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* Amber glow */
+.glow-gold {
+  box-shadow: 0 0 20px rgba(245, 158, 11, 0.12), 0 0 60px rgba(245, 158, 11, 0.04);
+}
+
+/* Pulse animation for selected plots */
+@keyframes land-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.4); }
+  50% { box-shadow: 0 0 0 14px rgba(245, 158, 11, 0); }
+}
+.pulse-gold { animation: land-pulse 2.5s ease-in-out infinite; }
+
+/* Film grain texture — organic feel */
+.grain::before {
+  content: '';
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.03'/%3E%3C/svg%3E");
+  pointer-events: none;
+  z-index: 0;
+  opacity: 0.4;
+}
+
+/* Sunrise gradient — top of pages */
+.sunrise {
+  background: linear-gradient(180deg, rgba(245,158,11,0.04) 0%, transparent 40%);
+}
+
+/* Shimmer loading */
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+.shimmer {
+  background: linear-gradient(90deg, var(--bg-card) 25%, var(--bg-elevated) 50%, var(--bg-card) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s ease-in-out infinite;
+}
+
+/* Warm focus ring */
+*:focus-visible {
+  outline: 2px solid rgba(245, 158, 11, 0.5);
+  outline-offset: 2px;
+  border-radius: 8px;
+}
+
+/* Smooth page transitions */
+.page-enter { opacity: 0; transform: translateY(8px); }
+.page-enter-active { opacity: 1; transform: translateY(0); transition: all 0.4s ease-out; }
+
+/* Smooth scrollbar */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.2); }
+
+/* Hindi font */
+.hindi { font-family: 'Noto Sans Devanagari', 'Inter', sans-serif; }
+
+/* Stat counter animation */
+@keyframes countUp {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.stat-animate { animation: countUp 0.6s ease-out forwards; }
+
+/* Print styles for nakal PDF */
+@media print {
+  @page { size: A4 landscape; margin: 10mm 12mm 14mm 12mm; }
+  body { background: #fff !important; color: #000 !important; margin: 0 !important; padding: 0 !important; }
+  .no-print, nav { display: none !important; }
+  .glass, .glass-sm { background: #fff !important; border: none !important; backdrop-filter: none !important; }
+  .text-gold-gradient { -webkit-text-fill-color: #333 !important; background: none !important; }
+  /* Nakal page fits A4 landscape */
+  table { font-size: 11px !important; }
+  table td { padding: 2px 4px !important; line-height: 1.6 !important; font-size: 11px !important; }
+  table th { padding: 4px 4px !important; font-size: 10px !important; }
 }
