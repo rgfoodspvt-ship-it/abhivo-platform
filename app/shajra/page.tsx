@@ -29,6 +29,12 @@ export default function ShajraPage() {
   const [loading, setLoading] = useState(false);
   const [loadingStage, setLoadingStage] = useState('');
   const [showReport, setShowReport] = useState(false);
+
+  // Khewat mode
+  const [mode, setMode] = useState<'khasra' | 'khewat'>('khasra');
+  const [khewatNo, setKhewatNo] = useState('');
+  const [khewatData, setKhewatData] = useState<any>(null);
+  const [khewatLoading, setKhewatLoading] = useState(false);
   const [selMurabba, setSelMurabba] = useState('');
   const [ownerData, setOwnerData] = useState<Record<string, any>>({});
   const [neighborData, setNeighborData] = useState<{name:string;direction:string}[]>([]);
@@ -367,6 +373,41 @@ export default function ShajraPage() {
     }
   }
 
+  // Khewat mode: search and generate report
+  async function searchKhewat() {
+    if (!khewatNo || !selectedVillage) return;
+    setKhewatLoading(true);
+    try {
+      const data = await fetchAPI<any>(`/map/khewat-shajra-data?village=${encodeURIComponent(selectedVillage)}&district_code=18&khewat_no=${encodeURIComponent(khewatNo)}`);
+      setKhewatData(data);
+      // Convert polygons to features for ShajraCanvas
+      if (data.polygons?.length) {
+        const khewatFeatures: PolygonFeature[] = data.polygons.map((p: any) => ({
+          geometry: JSON.parse(p.geometry),
+          properties: { khasra_no: p.khasra, khewat_no: p.murabba, area_acres: (p.area_sqyd || 0) / 4840 }
+        }));
+        // Auto-select all khasras
+        const newSelected = new Map<string, PolygonFeature>();
+        khewatFeatures.forEach(f => {
+          const key = f.properties.khasra_no + '_' + f.properties.khewat_no;
+          newSelected.set(key, f);
+        });
+        setSelected(newSelected);
+        setFeatures(prev => [...prev, ...khewatFeatures.filter(kf => !prev.some(pf => pf.properties.khasra_no === kf.properties.khasra_no && pf.properties.khewat_no === kf.properties.khewat_no))]);
+        // Build v3Data from khewat response
+        const v3Plots = data.polygons.map((p: any) => ({
+          murabba: p.murabba, khasra: p.khasra,
+          area_kanal: p.area_kanal, area_marla: p.area_marla,
+          land_type: p.land_type, owners: data.owners?.map((o: any) => o.name).join(', '),
+          acquired: false,
+        }));
+        setV3Data({ plots: v3Plots, acquired: [] });
+        setShowReport(true);
+      }
+    } catch (e) { console.error('Khewat search failed:', e); }
+    setKhewatLoading(false);
+  }
+
   // Update map selection highlight
   useEffect(() => {
     if (!mapObj) return;
@@ -442,7 +483,23 @@ export default function ShajraPage() {
           <h2 style={{ fontSize: 18, fontWeight: 700, color: '#F5F0E8', marginBottom: 4 }}>
             <span style={{ color: '#F59E0B' }}>Shajra</span> · शजरा किश्तवार
           </h2>
-          <p style={{ fontSize: 11, color: '#9C8F7D', marginBottom: 16 }}>भूखंड चुनें और शजरा नक्शा बनाएं</p>
+          <p style={{ fontSize: 11, color: '#9C8F7D', marginBottom: 12 }}>भूखंड चुनें और शजरा नक्शा बनाएं</p>
+
+          {/* Mode toggle */}
+          <div style={{ display: 'flex', gap: 4, marginBottom: 12 }}>
+            <button onClick={() => setMode('khasra')} style={{
+              flex: 1, padding: '8px 0', borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: 'pointer',
+              background: mode === 'khasra' ? '#F59E0B' : 'rgba(245,158,11,0.1)',
+              color: mode === 'khasra' ? '#0F0D0A' : '#9C8F7D',
+              border: mode === 'khasra' ? 'none' : '1px solid rgba(245,158,11,0.15)',
+            }}>खसरा चुनें</button>
+            <button onClick={() => setMode('khewat')} style={{
+              flex: 1, padding: '8px 0', borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: 'pointer',
+              background: mode === 'khewat' ? '#F59E0B' : 'rgba(245,158,11,0.1)',
+              color: mode === 'khewat' ? '#0F0D0A' : '#9C8F7D',
+              border: mode === 'khewat' ? 'none' : '1px solid rgba(245,158,11,0.15)',
+            }}>खेवट देखें</button>
+          </div>
 
           <select value={district} onChange={e => { setDistrict(e.target.value); setTehsil(''); setSelectedVillage(''); setFeatures([]); }} style={{ ...dd, marginBottom: 8 }}>
             <option value="">District · जिला</option>
@@ -456,6 +513,35 @@ export default function ShajraPage() {
             <option value="">Village · गाँव ({villageNames.length})</option>
             {villageNames.map(v => <option key={v} value={v}>{v}</option>)}
           </select>
+
+          {/* Khewat mode: search input */}
+          {mode === 'khewat' && selectedVillage && (
+            <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
+              <input value={khewatNo} onChange={e => setKhewatNo(e.target.value)} placeholder="खेवट संख्या" style={{ ...dd, flex: 1 }} onKeyDown={e => e.key === 'Enter' && searchKhewat()} />
+              <button onClick={searchKhewat} disabled={khewatLoading || !khewatNo} style={{
+                padding: '10px 16px', borderRadius: 10, background: '#F59E0B', color: '#0F0D0A',
+                fontWeight: 700, fontSize: 12, border: 'none', cursor: 'pointer', opacity: khewatLoading ? 0.6 : 1,
+              }}>{khewatLoading ? '...' : 'नक्शा बनाएं'}</button>
+            </div>
+          )}
+
+          {/* Khewat result summary */}
+          {mode === 'khewat' && khewatData && (
+            <div style={{ padding: '10px 12px', background: 'rgba(245,158,11,0.06)', borderRadius: 8, marginBottom: 8, border: '1px solid rgba(245,158,11,0.1)' }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: '#F59E0B' }}>खेवट {khewatData.khewat_no}</div>
+              <div style={{ fontSize: 11, color: '#9C8F7D', marginTop: 2 }}>
+                {khewatData.khasras_with_polygon} खसरे · {Math.round(khewatData.total_area_sqyd).toLocaleString()} वर्ग गज
+              </div>
+              <div style={{ fontSize: 10, color: '#9C8F7D', marginTop: 2 }}>
+                {khewatData.owners?.slice(0, 3).map((o: any) => o.name).join(', ')}
+              </div>
+              {khewatData.khasras_without_polygon?.length > 0 && (
+                <div style={{ fontSize: 9, color: '#EF4444', marginTop: 4 }}>
+                  नक्शा उपलब्ध नहीं: {khewatData.khasras_without_polygon.join(', ')}
+                </div>
+              )}
+            </div>
+          )}
 
           {loading && (
             <div style={{ textAlign: 'center', padding: '16px 0' }}>
@@ -629,7 +715,14 @@ export default function ShajraPage() {
                 <div style={{ fontSize: 10, color: '#555', letterSpacing: '0.15em' }}>LAND · LEGACY · GROWTH</div>
               </div>
               <div style={{ textAlign: 'center', flex: 1 }}>
-                <h2 style={{ fontSize: 22, fontWeight: 700, color: '#333', margin: 0 }}>शजरा नक्शा · Shajra Report</h2>
+                <h2 style={{ fontSize: 22, fontWeight: 700, color: '#333', margin: 0 }}>
+                  {mode === 'khewat' && khewatData ? `शजरा खेवट संख्या ${khewatData.khewat_no}` : 'शजरा नक्शा · Shajra Report'}
+                </h2>
+                {mode === 'khewat' && khewatData?.owners?.length > 0 && (
+                  <div style={{ fontSize: 11, color: '#555', marginTop: 4 }}>
+                    {khewatData.owners.slice(0, 5).map((o: any) => `${o.name} ${o.relation || ''} ${o.father || ''}`).join(' · ')}
+                  </div>
+                )}
               </div>
               <div style={{ textAlign: 'right', fontSize: 11, color: '#555' }}>
                 <div>{new Date().toLocaleDateString('en-IN')}</div>
