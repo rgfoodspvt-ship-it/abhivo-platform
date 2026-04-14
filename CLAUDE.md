@@ -139,7 +139,18 @@ ShajraCanvas changes for khewat mode:
 
 ---
 
-## FEATURE 2: 3D BIRD'S-EYE MAP VIEW
+## FEATURE 2: 3D BIRD'S-EYE MAP VIEW — COMPLETE
+
+### 3D Bird's-Eye View — COMPLETE
+Endpoint: GET /map/3d-data?village=X&district_code=18&khewat_no=121
+Component: BirdsEyeView.tsx (MapLibre GL JS, Google satellite tiles)
+Tab: "3D दृश्य" on /shajra page alongside "2D नक्शा"
+Works for both khasra and khewat selection.
+Returns edge dimensions computed by PostGIS (ST_Distance, ST_PointN, ST_ExteriorRing).
+Camera: pitch 55°, bearing orbit 180° over 12s.
+Screenshot saved to component state — ready for video generator (Feature 4).
+
+## FEATURE 2 (original spec for reference): 3D BIRD'S-EYE MAP VIEW
 
 New interactive 3D view for any khasra or khewat.
 Camera descends from high altitude, lands on plot, orbits slowly.

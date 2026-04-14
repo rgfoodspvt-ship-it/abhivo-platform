@@ -2,6 +2,8 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { getDistricts, getTehsils, getVillages, getPolygons, lookupKhasra, fetchAPI } from '@/lib/api';
 import ShajraCanvas from '@/components/ShajraCanvas';
+import dynamic from 'next/dynamic';
+const BirdsEyeView = dynamic(() => import('@/components/BirdsEyeView'), { ssr: false });
 
 interface PolygonFeature {
   geometry: { coordinates: any; type: string };
@@ -35,6 +37,9 @@ export default function ShajraPage() {
   const [khewatNo, setKhewatNo] = useState('');
   const [khewatData, setKhewatData] = useState<any>(null);
   const [khewatLoading, setKhewatLoading] = useState(false);
+  const [viewTab, setViewTab] = useState<'2d' | '3d'>('2d');
+  const [data3D, setData3D] = useState<any>(null);
+  const [screenshot3D, setScreenshot3D] = useState<string | null>(null);
   const [selMurabba, setSelMurabba] = useState('');
   const [ownerData, setOwnerData] = useState<Record<string, any>>({});
   const [neighborData, setNeighborData] = useState<{name:string;direction:string}[]>([]);
@@ -408,6 +413,25 @@ export default function ShajraPage() {
     setKhewatLoading(false);
   }
 
+  // Load 3D data
+  async function load3DView() {
+    setViewTab('3d');
+    if (data3D) return; // already loaded
+    try {
+      let url = '';
+      if (mode === 'khewat' && khewatNo && selectedVillage) {
+        url = `/map/3d-data?village=${encodeURIComponent(selectedVillage)}&district_code=18&khewat_no=${encodeURIComponent(khewatNo)}`;
+      } else if (selected.size > 0) {
+        const first = [...selected.values()][0];
+        url = `/map/3d-data?village=${encodeURIComponent(selectedVillage)}&district_code=18&khasra_no=${encodeURIComponent(first.properties.khasra_no)}&murabba=${encodeURIComponent(first.properties.khewat_no)}`;
+      }
+      if (url) {
+        const d = await fetchAPI<any>(url);
+        setData3D(d);
+      }
+    } catch (e) { console.error('3D data failed:', e); }
+  }
+
   // Update map selection highlight
   useEffect(() => {
     if (!mapObj) return;
@@ -737,7 +761,20 @@ export default function ShajraPage() {
               <span><span style={{ color: '#8B5E00' }}>जिला:</span> {district}</span>
             </div>
 
-            {/* Shajra Map — Rough.js hand-drawn */}
+            {/* View tabs */}
+            <div style={{ display: 'flex', gap: 4, marginBottom: 12 }}>
+              <button onClick={() => setViewTab('2d')} style={{
+                padding: '8px 20px', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: 'pointer',
+                background: viewTab === '2d' ? '#333' : '#eee', color: viewTab === '2d' ? '#fff' : '#333', border: 'none',
+              }}>2D नक्शा</button>
+              <button onClick={load3DView} style={{
+                padding: '8px 20px', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: 'pointer',
+                background: viewTab === '3d' ? '#333' : '#eee', color: viewTab === '3d' ? '#fff' : '#333', border: 'none',
+              }}>3D दृश्य</button>
+            </div>
+
+            {/* 2D Shajra Map */}
+            {viewTab === '2d' && (
             <div style={{ border: '2px solid #F59E0B', borderRadius: 10, overflow: 'hidden', marginBottom: 24 }}>
               <div style={{ background: 'rgba(245,158,11,0.06)', padding: '10px 16px', fontSize: 13, fontWeight: 700, color: '#8B5E00', borderBottom: '1px solid rgba(245,158,11,0.15)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <span>भूखंड नक्शा · शजरा किश्तवार</span>
@@ -752,6 +789,26 @@ export default function ShajraPage() {
                 v3Data={v3Data}
               />
             </div>
+            )}
+
+            {/* 3D Bird's Eye View */}
+            {viewTab === '3d' && (
+            <div style={{ marginBottom: 24 }}>
+              {data3D?.polygons?.length ? (
+                <BirdsEyeView
+                  polygons={data3D.polygons}
+                  adjacentPolygons={data3D.adjacent_polygons || []}
+                  combinedBbox={data3D.combined_bbox || []}
+                  combinedCentroid={data3D.combined_centroid || { lat: 0, lon: 0 }}
+                  onScreenshot={(url) => setScreenshot3D(url)}
+                />
+              ) : (
+                <div style={{ padding: 40, textAlign: 'center', color: '#999', fontSize: 14 }}>
+                  {data3D ? '3D data not available for this selection' : 'Loading 3D view...'}
+                </div>
+              )}
+            </div>
+            )}
 
             {/* Stats */}
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 24 }}>
