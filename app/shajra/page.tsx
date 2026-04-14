@@ -416,14 +416,15 @@ export default function ShajraPage() {
   // Load 3D data
   async function load3DView() {
     setViewTab('3d');
-    if (data3D) return; // already loaded
+    setData3D(null); // always re-fetch for current selection
     try {
       let url = '';
       if (mode === 'khewat' && khewatNo && selectedVillage) {
         url = `/map/3d-data?village=${encodeURIComponent(selectedVillage)}&district_code=18&khewat_no=${encodeURIComponent(khewatNo)}`;
       } else if (selected.size > 0) {
-        const first = [...selected.values()][0];
-        url = `/map/3d-data?village=${encodeURIComponent(selectedVillage)}&district_code=18&khasra_no=${encodeURIComponent(first.properties.khasra_no)}&murabba=${encodeURIComponent(first.properties.khewat_no)}`;
+        // Send all selected khasras as comma-separated murabba~khasra pairs
+        const pairs = [...selected.values()].map(f => `${f.properties.khewat_no}~${f.properties.khasra_no}`).join(',');
+        url = `/map/3d-data?village=${encodeURIComponent(selectedVillage)}&district_code=18&khasras=${encodeURIComponent(pairs)}`;
       }
       if (url) {
         const d = await fetchAPI<any>(url);
