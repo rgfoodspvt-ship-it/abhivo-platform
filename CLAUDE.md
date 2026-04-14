@@ -312,7 +312,20 @@ Need 100+ estimates for Sonipat before training ML model
 
 ---
 
-## FEATURE 4: AI VIDEO GENERATOR
+## FEATURE 4: AI VIDEO GENERATOR — COMPLETE (v1)
+
+### AI Video Generator — COMPLETE
+Endpoints: POST /video/generate, GET /video/status/{id}, GET /video/download/{id}
+Frontend: "📹 वीडियो" tab on /shajra page
+Scenes: Satellite bg → Property info card → POI distances → CTA
+Audio: gTTS Hindi voiceover (free, no API key)
+Mix: FFmpeg combines scene images + voiceover into MP4
+Output: 1080x1920 MP4 (vertical format)
+Cost: Free (gTTS + FFmpeg, no paid APIs)
+Location: /home/rgfoodspvt/land-api/video_gen.py
+Note: v1 uses simple slide images. v2 will add Remotion for animations.
+
+## FEATURE 4 (original spec): AI VIDEO GENERATOR
 
 Auto-generate property marketing video from khasra or khewat selection.
 

@@ -37,9 +37,12 @@ export default function ShajraPage() {
   const [khewatNo, setKhewatNo] = useState('');
   const [khewatData, setKhewatData] = useState<any>(null);
   const [khewatLoading, setKhewatLoading] = useState(false);
-  const [viewTab, setViewTab] = useState<'2d' | '3d'>('2d');
+  const [viewTab, setViewTab] = useState<'2d' | '3d' | 'video'>('2d');
   const [data3D, setData3D] = useState<any>(null);
   const [screenshot3D, setScreenshot3D] = useState<string | null>(null);
+  const [videoJobId, setVideoJobId] = useState('');
+  const [videoStatus, setVideoStatus] = useState('');
+  const [videoGenerating, setVideoGenerating] = useState(false);
   const [selMurabba, setSelMurabba] = useState('');
   const [ownerData, setOwnerData] = useState<Record<string, any>>({});
   const [neighborData, setNeighborData] = useState<{name:string;direction:string}[]>([]);
@@ -413,6 +416,32 @@ export default function ShajraPage() {
     setKhewatLoading(false);
   }
 
+  // Generate video
+  async function generateVideo() {
+    setVideoGenerating(true); setVideoStatus('वीडियो बन रहा है...');
+    try {
+      const kns = [...selected.values()].map(f => f.properties.khewat_no + '//' + f.properties.khasra_no);
+      const res = await fetch('/video/generate', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ village: selectedVillage, district_code: '18', khasra_nos: kns, khewat_no: mode === 'khewat' ? khewatNo : '', asking_price_lakh: 0, property_type: 'कृषि भूमि', language: 'hindi', notable_features: [], agent_name: '', agent_phone: '' })
+      });
+      const { job_id } = await res.json();
+      setVideoJobId(job_id);
+      // Poll status
+      const poll = setInterval(async () => {
+        const sr = await fetch(`/video/status/${job_id}`);
+        const st = await sr.json();
+        if (st.status === 'done') {
+          clearInterval(poll); setVideoStatus('done'); setVideoGenerating(false);
+        } else if (st.status === 'failed') {
+          clearInterval(poll); setVideoStatus('failed: ' + (st.error || '')); setVideoGenerating(false);
+        } else {
+          setVideoStatus('वीडियो बन रहा है... (2-3 मिनट)');
+        }
+      }, 5000);
+    } catch (e) { setVideoStatus('Error'); setVideoGenerating(false); }
+  }
+
   // Load 3D data
   async function load3DView() {
     setViewTab('3d');
@@ -772,6 +801,10 @@ export default function ShajraPage() {
                 padding: '8px 20px', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: 'pointer',
                 background: viewTab === '3d' ? '#333' : '#eee', color: viewTab === '3d' ? '#fff' : '#333', border: 'none',
               }}>3D दृश्य</button>
+              <button onClick={() => setViewTab('video' as any)} style={{
+                padding: '8px 20px', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: 'pointer',
+                background: viewTab === 'video' ? '#333' : '#eee', color: viewTab === 'video' ? '#fff' : '#333', border: 'none',
+              }}>📹 वीडियो</button>
             </div>
 
             {/* 2D Shajra Map */}
@@ -808,6 +841,30 @@ export default function ShajraPage() {
                   {data3D ? '3D data not available for this selection' : 'Loading 3D view...'}
                 </div>
               )}
+            </div>
+            )}
+
+            {/* Video Generator */}
+            {viewTab === 'video' && (
+            <div style={{ marginBottom: 24, padding: 24, border: '2px solid #F59E0B', borderRadius: 10, background: 'rgba(245,158,11,0.02)' }}>
+              <h3 style={{ fontSize: 16, fontWeight: 700, color: '#333', marginBottom: 12 }}>📹 AI वीडियो बनाएं</h3>
+              <p style={{ fontSize: 12, color: '#666', marginBottom: 16 }}>चयनित भूखंडों का 25-30 सेकंड का मार्केटिंग वीडियो बनाएं — हिंदी वॉइसओवर के साथ</p>
+              {!videoGenerating && videoStatus !== 'done' && (
+                <button onClick={generateVideo} style={{
+                  padding: '14px 32px', borderRadius: 10, fontSize: 15, fontWeight: 700, cursor: 'pointer',
+                  background: 'linear-gradient(135deg, #F59E0B, #FBBF24)', color: '#0F0D0A', border: 'none',
+                }}>🎬 वीडियो बनाएं</button>
+              )}
+              {videoGenerating && <p style={{ fontSize: 13, color: '#F59E0B' }}>{videoStatus}</p>}
+              {videoStatus === 'done' && videoJobId && (
+                <div style={{ marginTop: 12 }}>
+                  <a href={`/video/download/${videoJobId}`} style={{
+                    display: 'inline-block', padding: '12px 28px', borderRadius: 10, fontSize: 14, fontWeight: 700,
+                    background: '#F59E0B', color: '#0F0D0A', textDecoration: 'none',
+                  }}>⬇ वीडियो डाउनलोड करें</a>
+                </div>
+              )}
+              {videoStatus.startsWith('failed') && <p style={{ fontSize: 12, color: '#EF4444' }}>{videoStatus}</p>}
             </div>
             )}
 
