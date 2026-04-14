@@ -133,7 +133,7 @@ export default function ShajraPage() {
       // Step 2: Load polygons (slower)
       setLoadingStage('भूखंड नक्शे लोड हो रहे हैं...');
       const data = await getPolygons(vName, district);
-      // Filter: if polygons span too wide (>0.05° = ~5km), keep only the largest cluster
+      // Filter: only if polygons span very wide (>0.2° = ~20km) — duplicate village in different location
       let filteredFeats = data.features;
       if (filteredFeats.length > 10) {
         const centroids = filteredFeats.map((f: any) => {
@@ -143,11 +143,11 @@ export default function ShajraPage() {
         });
         const lngs = centroids.map((c: number[]) => c[0]).filter((v: number) => v > 0);
         const lngSpan = Math.max(...lngs) - Math.min(...lngs);
-        if (lngSpan > 0.05) {
-          // Find the median longitude — majority cluster
+        if (lngSpan > 0.2) {
+          // Very wide span = duplicate village names in different locations
           const sorted = [...lngs].sort((a, b) => a - b);
           const medLng = sorted[Math.floor(sorted.length / 2)];
-          filteredFeats = filteredFeats.filter((_: any, i: number) => Math.abs(centroids[i][0] - medLng) < 0.02);
+          filteredFeats = filteredFeats.filter((_: any, i: number) => Math.abs(centroids[i][0] - medLng) < 0.08);
         }
       }
       setFeatures(filteredFeats);

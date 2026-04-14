@@ -131,9 +131,10 @@ export default function ShajraCanvas({ features, selectedKeys, village, tehsil, 
       ctx.save(); ctx.beginPath(); ctx.rect(ML+1, MT+1, MW-2, MH-2); ctx.clip();
 
       // 4. ROAD — use OSM road data for correct position/angle
+      let visibleRoadsDrawn = 0;
       {
         let osmRoads: any[] = [];
-        const rPad = Math.max(0.01, (by1-by0)*0.5);
+        const rPad = Math.max(0.015, Math.max(by1-by0, bx1-bx0) * 0.8);
         try { const r = await fetch(`/map/roads?bbox=${by0-rPad},${bx0-rPad},${by1+rPad},${bx1+rPad}`).then(r => r.ok ? r.json() : {roads:[]}); osmRoads = r.roads || []; } catch {}
         // Only trunk/primary/secondary roads
         // Show ALL road types — highways, village roads, tracks, paths
@@ -141,59 +142,51 @@ export default function ShajraCanvas({ features, selectedKeys, village, tehsil, 
         // Find roads that pass near the selected plots (within 100px of any selected plot centroid)
         const selCents = sel.map(f => { const r = getRing(f)!; return [tx(r.reduce((s,c)=>s+c[0],0)/r.length), ty(r.reduce((s,c)=>s+c[1],0)/r.length)]; });
 
-        major.forEach((road: any) => {
-          const pts = road.coords.map((c: number[]) => [tx(c[0]), ty(c[1])]);
-          if (pts.length < 2) return;
-          // Show if any road point falls within or near the map area (generous margin)
-          const inMap = pts.some((p: number[]) => p[0] >= ML-200 && p[0] <= ML+MW+200 && p[1] >= MT-200 && p[1] <= MT+MH+200);
-          if (!inMap) return;
+        // Filter: road must have at least one coord within plot geo bounds + margin
+        const geoMargin = Math.max(bx1-bx0, by1-by0) * 0.5;
+        const visibleRoads = major.filter((road: any) => {
+          return road.coords.some((c: number[]) => {
+            return c[0] >= bx0-geoMargin && c[0] <= bx1+geoMargin && c[1] >= by0-geoMargin && c[1] <= by1+geoMargin;
+          });
+        });
 
-          // Road half-width by type
-          const isTrunk = ['trunk','primary','trunk_link'].includes(road.type);
-          const isMajor = ['secondary','tertiary','secondary_link','tertiary_link'].includes(road.type);
-          const hw = isTrunk ? Math.max(15, MW*0.025) : isMajor ? Math.max(10, MW*0.018) : Math.max(7, MW*0.01);
+        visibleRoads.forEach((road: any) => {
+          try {
+            const pts = road.coords.map((c: number[]) => [tx(c[0]), ty(c[1])]);
+            if (pts.length < 2) return;
 
-          // Build offset polylines
-          const leftP: number[][] = [], rightP: number[][] = [];
-          for (let i = 0; i < pts.length; i++) {
-            const prev = pts[Math.max(0,i-1)], next = pts[Math.min(pts.length-1,i+1)];
-            const dx = next[0]-prev[0], dy = next[1]-prev[1], len = Math.sqrt(dx*dx+dy*dy)||1;
-            leftP.push([pts[i][0]-dy/len*hw, pts[i][1]+dx/len*hw]);
-            rightP.push([pts[i][0]+dy/len*hw, pts[i][1]-dx/len*hw]);
-          }
+            const isTrunk = ['trunk','primary','trunk_link'].includes(road.type);
+            const isMajor = ['secondary','tertiary','secondary_link','tertiary_link'].includes(road.type);
+            const hw = isTrunk ? Math.max(15, MW*0.025) : isMajor ? Math.max(10, MW*0.018) : Math.max(7, MW*0.01);
 
-          // Corridor polygon
-          const corridor = [...leftP, ...([...rightP].reverse())];
-          ctx.save();
-          ctx.beginPath(); corridor.forEach((p,i) => i===0?ctx.moveTo(p[0],p[1]):ctx.lineTo(p[0],p[1])); ctx.closePath(); ctx.clip();
-          ctx.fillStyle = 'rgba(200,150,150,0.12)'; ctx.fill();
-          // Red hatching
-          const cxs=corridor.map(p=>p[0]), cys=corridor.map(p=>p[1]);
-          for (let hx = Math.min(...cxs); hx < Math.max(...cxs); hx += 5) {
-            ctx.beginPath(); ctx.moveTo(hx, Math.min(...cys)-5); ctx.lineTo(hx+hw, Math.max(...cys)+5);
-            ctx.strokeStyle='#c41e3a'; ctx.lineWidth=0.7; ctx.stroke();
-          }
-          ctx.restore();
-          // Two border lines
-          ctx.beginPath(); leftP.forEach((p,i) => i===0?ctx.moveTo(p[0],p[1]):ctx.lineTo(p[0],p[1]));
-          ctx.strokeStyle='#000'; ctx.lineWidth=2.5; ctx.stroke();
-          ctx.beginPath(); rightP.forEach((p,i) => i===0?ctx.moveTo(p[0],p[1]):ctx.lineTo(p[0],p[1]));
-          ctx.strokeStyle='#000'; ctx.lineWidth=2.5; ctx.stroke();
-          // Label
-          const mi = Math.floor(pts.length/2);
-          if (pts[mi][0]>ML && pts[mi][0]<ML+MW && pts[mi][1]>MT && pts[mi][1]<MT+MH) {
-            const pr=pts[Math.max(0,mi-1)], nx=pts[Math.min(pts.length-1,mi+1)];
-            let la=Math.atan2(nx[1]-pr[1],nx[0]-pr[0]); if(la>Math.PI/2)la-=Math.PI; if(la<-Math.PI/2)la+=Math.PI;
-            ctx.save(); ctx.translate(pts[mi][0],pts[mi][1]); ctx.rotate(la);
-            ctx.font='bold 11px serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
-            const nm = road.name || '\u0938\u0921\u093C\u0915';
-            const rlw=ctx.measureText(nm).width;
-            ctx.fillStyle='#fff'; ctx.fillRect(-rlw/2-4,-8,rlw+8,16);
-            ctx.fillStyle='#8b1a1a'; ctx.fillText(nm,0,0);
-            ctx.restore();
-          }
+            // Simple: draw road as thick line with border — no clip (avoids canvas corruption)
+            visibleRoadsDrawn++;
+            // Road fill
+            ctx.beginPath(); pts.forEach((p: number[],i: number) => i===0?ctx.moveTo(p[0],p[1]):ctx.lineTo(p[0],p[1]));
+            ctx.strokeStyle = 'rgba(200,150,150,0.25)'; ctx.lineWidth = hw*2; ctx.lineCap = 'butt'; ctx.lineJoin = 'miter'; ctx.stroke();
+            // Two border lines
+            ctx.beginPath(); pts.forEach((p: number[],i: number) => i===0?ctx.moveTo(p[0],p[1]):ctx.lineTo(p[0],p[1]));
+            ctx.strokeStyle = '#000'; ctx.lineWidth = isTrunk ? 2.5 : isMajor ? 1.5 : 1; ctx.stroke();
+
+            // Label for named roads
+            if (road.name) {
+              const mi = Math.floor(pts.length/2);
+              if (pts[mi][0]>ML && pts[mi][0]<ML+MW && pts[mi][1]>MT && pts[mi][1]<MT+MH) {
+                const pr=pts[Math.max(0,mi-1)], nx=pts[Math.min(pts.length-1,mi+1)];
+                let la=Math.atan2(nx[1]-pr[1],nx[0]-pr[0]); if(la>Math.PI/2)la-=Math.PI; if(la<-Math.PI/2)la+=Math.PI;
+                ctx.save(); ctx.translate(pts[mi][0],pts[mi][1]); ctx.rotate(la);
+                ctx.font='bold 10px serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
+                const rlw=ctx.measureText(road.name).width;
+                ctx.fillStyle='#fff'; ctx.fillRect(-rlw/2-3,-7,rlw+6,14);
+                ctx.fillStyle='#8b1a1a'; ctx.fillText(road.name,0,0);
+                ctx.restore();
+              }
+            }
+          } catch {}
         });
       }
+
+      // 4b. Field paths drawn after selected plots (below)
 
       // 5. SELECTED KHASRAS — STRONG orange fill, thick black borders
       sel.forEach(f => {
@@ -335,6 +328,31 @@ export default function ShajraCanvas({ features, selectedKeys, village, tehsil, 
       ctx.fillText('Abhivo AI \u00B7 HSAC EODB + WebHALRIS', W-ML, H-25);
       ctx.font = '8px serif'; ctx.fillStyle = '#aaa'; ctx.textAlign = 'center';
       ctx.fillText('\u092F\u0939 \u0936\u091C\u0930\u093E \u0915\u0947\u0935\u0932 \u0938\u0942\u091A\u0928\u093E\u0930\u094D\u0925 \u0939\u0948\u0964 \u092F\u0939 \u0915\u094B\u0908 \u0938\u0930\u0915\u093E\u0930\u0940 \u092F\u093E \u0915\u093E\u0928\u0942\u0928\u0940 \u0926\u0938\u094D\u0924\u093E\u0935\u0947\u091C\u093C \u0928\u0939\u0940\u0902 \u0939\u0948\u0964', W/2, H-10);
+
+      // 8b. FIELD PATHS — drawn last so they can't break anything
+      // Only attempt if no OSM roads were drawn (fallback)
+      if (visibleRoadsDrawn === 0) {
+        try {
+          const pr = await fetch(`/map/paths?village=${encodeURIComponent(village)}&district=${encodeURIComponent(district)}`);
+          if (pr.ok) {
+            const pd = await pr.json();
+            (pd.paths || []).slice(0, 200).forEach((p: any) => {
+              try {
+                if (!p.coords || p.coords.length < 2 || p.width_karam < 3) return;
+                const p0 = [tx(p.coords[0][0]), ty(p.coords[0][1])];
+                const p1 = [tx(p.coords[1][0]), ty(p.coords[1][1])];
+                const dx = p1[0]-p0[0], dy = p1[1]-p0[1], len = Math.sqrt(dx*dx+dy*dy);
+                if (len < 3 || !isFinite(len)) return;
+                const hw = Math.max(2, Math.min(5, p.width_karam * 0.7));
+                const nx = -dy/len*hw, ny = dx/len*hw;
+                ctx.strokeStyle = '#777'; ctx.lineWidth = 1;
+                ctx.beginPath(); ctx.moveTo(p0[0]+nx, p0[1]+ny); ctx.lineTo(p1[0]+nx, p1[1]+ny); ctx.stroke();
+                ctx.beginPath(); ctx.moveTo(p0[0]-nx, p0[1]-ny); ctx.lineTo(p1[0]-nx, p1[1]-ny); ctx.stroke();
+              } catch {}
+            });
+          }
+        } catch {}
+      }
 
       // 9. OUTER BORDER
       rc.rectangle(4, 4, W-8, H-8, { stroke: '#000', strokeWidth: 2.5, roughness: 1 });
