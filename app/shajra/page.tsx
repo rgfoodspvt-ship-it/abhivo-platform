@@ -203,7 +203,7 @@ export default function ShajraPage() {
             const hits = map.queryRenderedFeatures(bbox, { layers: ['plots-fill'] });
             f = hits?.[0];
           }
-          if (!f?.properties) return;
+          if (!f?.properties || !f?.geometry) return;
           const ck = String(f.properties.khasra_no ?? '');
           const cm = String(f.properties.khewat_no ?? '');
           if (!ck || !cm || ck === 'undefined' || cm === 'undefined') return;
@@ -213,9 +213,9 @@ export default function ShajraPage() {
           const curVillage = selectedVillageRef.current;
           // Reject polygons with no village name when a village is already selected
           if (!clickVillage && curVillage) return;
-          // Switching to a different village — clear old selection
-          if (clickVillage && curVillage && clickVillage !== curVillage) {
-            setSelected(new Map());
+          // Switching to a different village — clear old selection and switch
+          const isVillageSwitch = clickVillage && curVillage && clickVillage !== curVillage;
+          if (isVillageSwitch) {
             setSelectedVillage(clickVillage);
             selectedVillageRef.current = clickVillage;
             setSelMurabba('');
@@ -226,20 +226,28 @@ export default function ShajraPage() {
             selectedVillageRef.current = clickVillage;
           }
 
-          // Use polygon id as unique key
-          const pid = String(f.properties.id || '');
-          const key = pid ? `${pid}_${ck}_${cm}` : `${ck}_${cm}`;
-          setSelected(prev => {
-            const n = new Map(prev);
-            if (n.has(key)) n.delete(key); else {
-              const full = pid
-                ? allFeaturesRef.current.find((ff: PolygonFeature) => String(ff.properties.id) === pid)
-                : allFeaturesRef.current.find((ff: PolygonFeature) =>
-                    String(ff.properties.khasra_no) === ck && String(ff.properties.khewat_no) === cm);
-              if (full) n.set(key, full);
-            }
-            return n;
-          });
+          // Use the ACTUAL clicked feature directly — don't search allFeaturesRef
+          // This ensures we get the exact polygon the user clicked, not a same-named one from another village
+          const clickedFeature: PolygonFeature = {
+            geometry: JSON.parse(JSON.stringify(f.geometry)),
+            properties: { ...f.properties }
+          };
+          const pid = String(clickedFeature.properties.id || '');
+          const key = pid ? `${pid}_${ck}_${cm}` : `${ck}_${cm}_${clickVillage}`;
+
+          if (isVillageSwitch) {
+            // Start fresh with just this polygon
+            const fresh = new Map<string, PolygonFeature>();
+            fresh.set(key, clickedFeature);
+            setSelected(fresh);
+          } else {
+            setSelected(prev => {
+              const n = new Map(prev);
+              if (n.has(key)) n.delete(key);
+              else n.set(key, clickedFeature);
+              return n;
+            });
+          }
         });
 
         // Hover handlers
