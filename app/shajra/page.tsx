@@ -196,6 +196,9 @@ export default function ShajraPage() {
           const cm = String(f.properties.khewat_no ?? '');
           if (!ck || !cm || ck === 'undefined' || cm === 'undefined') return;
           const key = ck + '_' + cm;
+          // Auto-set village from clicked polygon if not already set
+          const clickedVillage = f.properties.hindi_village || f.properties.village || '';
+          if (clickedVillage) setSelectedVillage(clickedVillage);
           setSelected(prev => {
             const n = new Map(prev);
             if (n.has(key)) n.delete(key); else {
@@ -353,10 +356,13 @@ export default function ShajraPage() {
     setShowReport(true);
     const plots = [...selected.values()];
 
+    // Determine village name — from selectedVillage or from selected polygon properties
+    const reportVillage = selectedVillage || plots[0]?.properties?.hindi_village || plots[0]?.properties?.village || '';
+
     // Fetch V3 enriched data (owners, land type, mutations, acquired status)
     const murabbas = [...new Set(plots.map(f => f.properties.khewat_no))].join(',');
     try {
-      const v3 = await fetchAPI<{plots: any[]; acquired: string[]}>(`/map/shajra-data?village=${encodeURIComponent(selectedVillage)}&district=${encodeURIComponent(district)}&murabbas=${encodeURIComponent(murabbas)}`);
+      const v3 = await fetchAPI<{plots: any[]; acquired: string[]}>(`/map/shajra-data?village=${encodeURIComponent(reportVillage)}&district=${encodeURIComponent(district)}&murabbas=${encodeURIComponent(murabbas)}`);
       setV3Data(v3);
     } catch (e) { console.warn('V3 data fetch failed:', e); }
 
@@ -502,7 +508,7 @@ export default function ShajraPage() {
   const selectedPlots = [...selected.values()];
   const selectedMurabbas = new Set(selectedPlots.map(f => f.properties.khewat_no));
   const reportFeatures = features.filter(f => selectedMurabbas.has(f.properties.khewat_no));
-  const totalAcres = selectedPlots.reduce((s, f) => s + (f.properties.area_acres || 0), 0);
+  const totalAcres = selectedPlots.reduce((s, f) => s + (f.properties.area_acres || (f.properties.area_sqyd ? f.properties.area_sqyd / 4840 : 0)), 0);
   const selectedByMurabba = selectedPlots.reduce((acc, f) => {
     const m = f.properties.khewat_no;
     if (!acc[m]) acc[m] = [];
