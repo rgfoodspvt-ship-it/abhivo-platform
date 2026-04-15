@@ -317,7 +317,7 @@ export default function ShajraPage() {
 
   async function loadVillage(vName: string) {
     if (!mapObj || !vName) return;
-    setSelectedVillage(vName); setLoading(true); setLoadingStage('गांव ढूंढ रहे हैं...'); setSelected(new Map()); setSelMurabba('');
+    setSelectedVillage(vName); setLoading(true); setLoadingStage('गांव ढूंढ रहे हैं...'); setSelected(new Map()); setSelMurabba(''); selectionCenterRef.current = null;
     try {
       // Step 1: Load murabba list + neighbors + centroid in parallel
       const [mData, nData, centroid] = await Promise.all([
@@ -402,10 +402,13 @@ export default function ShajraPage() {
     setShowReport(true);
     const plots = [...selected.values()];
 
+    // Derive village from clicked polygons (not dropdown)
+    const clickedVillage = plots[0]?.properties?.hindi_village || selectedVillage;
+
     // Fetch V3 enriched data (owners, land type, mutations, acquired status)
     const murabbas = [...new Set(plots.map(f => f.properties.khewat_no))].join(',');
     try {
-      const v3 = await fetchAPI<{plots: any[]; acquired: string[]}>(`/map/shajra-data?village=${encodeURIComponent(selectedVillage)}&district=${encodeURIComponent(district)}&murabbas=${encodeURIComponent(murabbas)}`);
+      const v3 = await fetchAPI<{plots: any[]; acquired: string[]}>(`/map/shajra-data?village=${encodeURIComponent(clickedVillage)}&district=${encodeURIComponent(district)}&murabbas=${encodeURIComponent(murabbas)}`);
       setV3Data(v3);
     } catch (e) { console.warn('V3 data fetch failed:', e); }
 
@@ -820,7 +823,7 @@ export default function ShajraPage() {
             padding: '10px 24px',
             background: '#0F0D0A', borderBottom: '2px solid #F59E0B',
           }}>
-            <span style={{ fontWeight: 700, color: '#F59E0B', fontSize: 15 }}>शजरा Report — {selectedVillage}</span>
+            <span style={{ fontWeight: 700, color: '#F59E0B', fontSize: 15 }}>शजरा Report — {selectedPlots[0]?.properties?.hindi_village || selectedVillage}</span>
             <div style={{ display: 'flex', gap: 8 }}>
               <button onClick={() => window.print()} style={{ padding: '8px 20px', borderRadius: 8, background: '#F59E0B', color: '#0F0D0A', fontWeight: 700, border: 'none', cursor: 'pointer', fontSize: 13 }}>Print</button>
               <button onClick={() => setShowReport(false)} style={{ padding: '8px 20px', borderRadius: 8, background: '#333', color: '#fff', fontWeight: 700, border: 'none', cursor: 'pointer', fontSize: 13 }}>Close</button>
@@ -885,8 +888,8 @@ export default function ShajraPage() {
               <ShajraCanvas
                 features={selectedPlots}
                 selectedKeys={new Set(selectedPlots.map(f => f.properties.khasra_no + '_' + f.properties.khewat_no))}
-                village={selectedVillage}
-                tehsil={tehsil}
+                village={selectedPlots[0]?.properties?.hindi_village || selectedVillage}
+                tehsil={selectedPlots[0]?.properties?.tehsil_name || tehsil}
                 district={district}
                 v3Data={v3Data}
               />
