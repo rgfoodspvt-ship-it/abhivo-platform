@@ -359,9 +359,13 @@ export default function ShajraPage() {
   // Select khasra from dropdown
   function selectKhasra(khasraNo: string) {
     if (!khasraNo || !selMurabba) return;
-    const key = khasraNo + '_' + selMurabba;
-    const feat = allFeaturesRef.current.find(f => f.properties.khasra_no === khasraNo && f.properties.khewat_no === selMurabba);
+    const curVillage = selectedVillageRef.current || '';
+    const feat = allFeaturesRef.current.find(f =>
+      f.properties.khasra_no === khasraNo && f.properties.khewat_no === selMurabba
+      && (!curVillage || (f.properties.hindi_village || f.properties.village || '') === curVillage));
     if (feat) {
+      const pid = String(feat.properties.id || '');
+      const key = pid ? `${pid}_${khasraNo}_${selMurabba}` : `${khasraNo}_${selMurabba}`;
       setSelected(prev => { const n = new Map(prev); n.set(key, feat); return n; });
       if (mapObj && feat.geometry) {
         const coords = getRing(feat) || [];
@@ -491,15 +495,16 @@ export default function ShajraPage() {
     }
     const plotsSrc = mapObj.getSource('plots') as any;
     if (!plotsSrc) return;
-    const selKeys = new Set([...selected.keys()]);
+    // Build set of selected polygon ids for fast lookup
+    const selIds = new Set([...selected.values()].map(f => String(f.properties.id || '')).filter(Boolean));
     const mColors = ['#F59E0B','#FBBF24','#B47708','#D4A017','#E8B810','#C49A08','#DBA520','#F0C420',
       '#E8A317','#D4940A','#F5B50B','#C8A208','#E0B020','#D09010','#F0A808','#C4A010'];
     const updatedFeatures = features.map(f => {
       let h = 0;
       const m = f.properties.khewat_no || '0';
       for (let i = 0; i < m.length; i++) h = (h * 31 + m.charCodeAt(i)) & 0xffff;
-      const key = f.properties.khasra_no + '_' + f.properties.khewat_no;
-      return { ...f, properties: { ...f.properties, _color: mColors[h % mColors.length], _selected: selKeys.has(key) ? 1 : 0 } };
+      const isSelected = selIds.has(String(f.properties.id || ''));
+      return { ...f, properties: { ...f.properties, _color: mColors[h % mColors.length], _selected: isSelected ? 1 : 0 } };
     });
     plotsSrc.setData({ type: 'FeatureCollection', features: updatedFeatures });
     if (mapObj.getLayer('plots-fill')) {
@@ -526,6 +531,7 @@ export default function ShajraPage() {
   }, [selected, mapObj, features, selMurabba]);
 
   const selectedPlots = [...selected.values()];
+  const selIds = new Set(selectedPlots.map(f => String(f.properties.id || '')).filter(Boolean));
   const selectedMurabbas = new Set(selectedPlots.map(f => f.properties.khewat_no));
   const reportVillage = selectedVillage || selectedPlots[0]?.properties?.hindi_village || selectedPlots[0]?.properties?.village || '';
   const reportFeatures = features.filter(f =>
@@ -648,10 +654,10 @@ export default function ShajraPage() {
                 {filteredKhasras.map(f => {
                   const a = f.properties.area_acres || 0;
                   const kanal = Math.floor(a * 8), marla = Math.round((a * 8 % 1) * 20);
-                  const key = f.properties.khasra_no + '_' + f.properties.khewat_no;
-                  const isSelected = selected.has(key);
+                  const fid = String(f.properties.id || '');
+                  const isSelected = selIds.has(fid);
                   return (
-                    <option key={f.properties.khasra_no} value={f.properties.khasra_no}>
+                    <option key={fid || f.properties.khasra_no} value={f.properties.khasra_no}>
                       {isSelected ? '✓ ' : '  '}{selMurabba}//{f.properties.khasra_no} — {kanal} कनाल {marla} मरला
                     </option>
                   );
