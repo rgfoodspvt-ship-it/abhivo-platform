@@ -58,12 +58,20 @@ export default function ShajraPage() {
   const allFeaturesRef = useRef<PolygonFeature[]>([]);
   const viewportTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [viewportLoading, setViewportLoading] = useState(false);
-  const selectedVillageRef = useRef(selectedVillage);
-  // Track the geographic center of the selected village to handle duplicate village names
-  const villageCenterRef = useRef<{lat: number; lon: number} | null>(null);
 
-  // Keep village ref in sync
-  useEffect(() => { selectedVillageRef.current = selectedVillage; }, [selectedVillage]);
+  // Geography-based selection center (replaces village guard)
+  const selectionCenterRef = useRef<{lat: number; lon: number} | null>(null);
+
+  // Haversine distance in km
+  function haversineKm(lat1: number, lon1: number, lat2: number, lon2: number) {
+    const R = 6371;
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLon = (lon2 - lon1) * Math.PI / 180;
+    const a = Math.sin(dLat/2)**2 + Math.cos(lat1*Math.PI/180) * Math.cos(lat2*Math.PI/180) * Math.sin(dLon/2)**2;
+    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  }
+
+  // (selectedVillage is now set from clicked polygon, used for display + v3Data fetch only)
 
   // Load districts
   useEffect(() => { getDistricts().then(d => setDistricts(d.districts)); }, []);
@@ -197,51 +205,42 @@ export default function ShajraPage() {
           if (!f?.properties || !f?.geometry) return;
           const pid = f.properties.id;
           if (!pid) return;
-          const clickVillage = f.properties.hindi_village || f.properties.village || '';
-          if (!clickVillage) return;
 
-          // Get click location for proximity check
           const clickLat = parseFloat(f.properties.centroid_lat) || e.lngLat.lat;
           const clickLon = parseFloat(f.properties.centroid_lon) || e.lngLat.lng;
-
-          const curVillage = selectedVillageRef.current;
-          const center = villageCenterRef.current;
           const key = String(pid);
 
+          // Build clean feature from the click event
           const feature: PolygonFeature = {
             geometry: f.geometry,
-            properties: { ...f.properties, area_acres: f.properties.area_acres || (f.properties.area_sqyd ? f.properties.area_sqyd / 4840 : 0) }
+            properties: {
+              ...f.properties,
+              area_acres: f.properties.area_acres || (f.properties.area_sqyd ? f.properties.area_sqyd / 4840 : 0),
+            }
           };
 
-          // Check if this click is near the current selection center (within ~5km = 0.05°)
-          const isNearCurrent = center
-            ? (Math.abs(clickLat - center.lat) < 0.05 && Math.abs(clickLon - center.lon) < 0.05)
-            : false;
+          const center = selectionCenterRef.current;
 
-          // Different village OR same village name but far away → clear and start fresh
-          const isDifferentLocation = curVillage && (
-            clickVillage !== curVillage || (center && !isNearCurrent)
-          );
-
-          if (isDifferentLocation) {
-            setSelectedVillage(clickVillage);
-            selectedVillageRef.current = clickVillage;
-            villageCenterRef.current = { lat: clickLat, lon: clickLon };
+          // RULE: No existing selection → start fresh
+          if (!center) {
+            selectionCenterRef.current = { lat: clickLat, lon: clickLon };
+            setSelectedVillage(f.properties.hindi_village || '');
             setSelMurabba('');
-            const fresh = new Map<string, PolygonFeature>();
-            fresh.set(key, feature);
-            setSelected(fresh);
+            setSelected(new Map([[key, feature]]));
             return;
           }
 
-          // First click → set village and center
-          if (!curVillage) {
-            setSelectedVillage(clickVillage);
-            selectedVillageRef.current = clickVillage;
-            villageCenterRef.current = { lat: clickLat, lon: clickLon };
+          // RULE: >2km from selection center → clear and start fresh
+          const dist = haversineKm(center.lat, center.lon, clickLat, clickLon);
+          if (dist > 2.0) {
+            selectionCenterRef.current = { lat: clickLat, lon: clickLon };
+            setSelectedVillage(f.properties.hindi_village || '');
+            setSelMurabba('');
+            setSelected(new Map([[key, feature]]));
+            return;
           }
 
-          // Toggle selection
+          // RULE: Within 2km → toggle in/out of selection
           setSelected(prev => {
             const n = new Map(prev);
             if (n.has(key)) n.delete(key);
@@ -338,7 +337,8 @@ export default function ShajraPage() {
       if (src) src.setData({ type: 'FeatureCollection', features: [] });
 
       // Set village center for proximity checks
-      villageCenterRef.current = { lat: centroid.lat, lon: centroid.lon };
+      // Set selection center so click handler knows where we are (dropdown = navigation only)
+      selectionCenterRef.current = { lat: centroid.lat, lon: centroid.lon };
 
       // Fly to centroid — moveend event will trigger viewport polygon loading
       mapObj.flyTo({ center: [centroid.lon, centroid.lat], zoom: 15, duration: 1500 });
@@ -378,7 +378,7 @@ export default function ShajraPage() {
   // Select khasra from dropdown
   function selectKhasra(khasraNo: string) {
     if (!khasraNo || !selMurabba) return;
-    const curVillage = selectedVillageRef.current || '';
+    const curVillage = selectedVillage || '';
     const feat = allFeaturesRef.current.find(f =>
       f.properties.khasra_no === khasraNo && f.properties.khewat_no === selMurabba
       && f.properties.id
@@ -691,7 +691,7 @@ export default function ShajraPage() {
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
             <label style={{ fontSize: 10, fontWeight: 700, color: '#9C8F7D', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Selected · चयनित</label>
             {selected.size > 0 && (
-              <button onClick={() => setSelected(new Map())} style={{ fontSize: 11, color: '#9C8F7D', background: 'none', border: 'none', cursor: 'pointer' }}>Clear all</button>
+              <button onClick={() => { setSelected(new Map()); selectionCenterRef.current = null; }} style={{ fontSize: 11, color: '#9C8F7D', background: 'none', border: 'none', cursor: 'pointer' }}>Clear all</button>
             )}
           </div>
 
