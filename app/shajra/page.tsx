@@ -131,6 +131,7 @@ export default function ShajraPage() {
   // Init map
   useEffect(() => {
     if (!mapRef.current) return;
+    import('maplibre-gl/dist/maplibre-gl.css');
     import('maplibre-gl').then(maplibregl => {
       const map = new maplibregl.Map({
         container: mapRef.current!,
@@ -196,61 +197,50 @@ export default function ShajraPage() {
         });
 
         // ── Click handler for polygon selection ──
+        // Uses GeoJSON source features directly (no tile clipping for geojson sources)
+        // Key is ALWAYS the database polygon id — globally unique, no collisions
         map.on('click', 'plots-fill', (e: any) => {
-          let f = e.features?.[0];
-          if (!f?.properties) {
-            const bbox: [any, any] = [[e.point.x - 5, e.point.y - 5], [e.point.x + 5, e.point.y + 5]];
-            const hits = map.queryRenderedFeatures(bbox, { layers: ['plots-fill'] });
-            f = hits?.[0];
-          }
+          const f = e.features?.[0];
           if (!f?.properties || !f?.geometry) return;
-          const ck = String(f.properties.khasra_no ?? '');
-          const cm = String(f.properties.khewat_no ?? '');
-          if (!ck || !cm || ck === 'undefined' || cm === 'undefined') return;
+          const pid = f.properties.id;
+          if (!pid) return; // skip polygons without database id
 
-          // Village tracking
           const clickVillage = f.properties.hindi_village || f.properties.village || '';
+          if (!clickVillage) return; // skip polygons without village name
+
           const curVillage = selectedVillageRef.current;
-          // Reject polygons with no village name when a village is already selected
-          if (!clickVillage && curVillage) return;
-          // Switching to a different village — clear old selection and switch
-          const isVillageSwitch = clickVillage && curVillage && clickVillage !== curVillage;
-          if (isVillageSwitch) {
+          const key = String(pid);
+
+          // Build a clean feature object from the map event
+          const feature: PolygonFeature = {
+            geometry: f.geometry,
+            properties: { ...f.properties, area_acres: f.properties.area_acres || (f.properties.area_sqyd ? f.properties.area_sqyd / 4840 : 0) }
+          };
+
+          // Different village → clear everything and start fresh
+          if (curVillage && clickVillage !== curVillage) {
             setSelectedVillage(clickVillage);
             selectedVillageRef.current = clickVillage;
             setSelMurabba('');
+            const fresh = new Map<string, PolygonFeature>();
+            fresh.set(key, feature);
+            setSelected(fresh);
+            return;
           }
-          // First click sets the village
-          if (!curVillage && clickVillage) {
+
+          // First click → set village
+          if (!curVillage) {
             setSelectedVillage(clickVillage);
             selectedVillageRef.current = clickVillage;
           }
 
-          // Find FULL feature from allFeaturesRef by id + village (not tile-clipped)
-          const pid = String(f.properties.id || '');
-          const targetVillage = clickVillage || curVillage || '';
-          const full = pid
-            ? allFeaturesRef.current.find((ff: PolygonFeature) =>
-                String(ff.properties.id) === pid)
-            : allFeaturesRef.current.find((ff: PolygonFeature) =>
-                String(ff.properties.khasra_no) === ck
-                && String(ff.properties.khewat_no) === cm
-                && (ff.properties.hindi_village || ff.properties.village || '') === targetVillage);
-          if (!full) return;
-          const key = pid ? `${pid}` : `${ck}_${cm}_${targetVillage}`;
-
-          if (isVillageSwitch) {
-            const fresh = new Map<string, PolygonFeature>();
-            fresh.set(key, full);
-            setSelected(fresh);
-          } else {
-            setSelected(prev => {
-              const n = new Map(prev);
-              if (n.has(key)) n.delete(key);
-              else n.set(key, full);
-              return n;
-            });
-          }
+          // Toggle selection
+          setSelected(prev => {
+            const n = new Map(prev);
+            if (n.has(key)) n.delete(key);
+            else n.set(key, feature);
+            return n;
+          });
         });
 
         // Hover handlers
@@ -381,10 +371,10 @@ export default function ShajraPage() {
     const curVillage = selectedVillageRef.current || '';
     const feat = allFeaturesRef.current.find(f =>
       f.properties.khasra_no === khasraNo && f.properties.khewat_no === selMurabba
+      && f.properties.id
       && (!curVillage || (f.properties.hindi_village || f.properties.village || '') === curVillage));
     if (feat) {
-      const pid = String(feat.properties.id || '');
-      const key = pid ? `${pid}_${khasraNo}_${selMurabba}` : `${khasraNo}_${selMurabba}`;
+      const key = String(feat.properties.id);
       setSelected(prev => { const n = new Map(prev); n.set(key, feat); return n; });
       if (mapObj && feat.geometry) {
         const coords = getRing(feat) || [];
