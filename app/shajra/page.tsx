@@ -217,13 +217,17 @@ export default function ShajraPage() {
             selectedVillageRef.current = clickVillage;
           }
 
-          const key = ck + '_' + cm;
+          // Use polygon id as unique key to avoid cross-village collisions
+          const pid = String(f.properties.id || '');
+          const key = pid ? `${pid}_${ck}_${cm}` : `${ck}_${cm}`;
           setSelected(prev => {
             const n = new Map(prev);
             if (n.has(key)) n.delete(key); else {
-              const full = allFeaturesRef.current.find((ff: PolygonFeature) =>
-                String(ff.properties.khasra_no) === ck && String(ff.properties.khewat_no) === cm
-                && (ff.properties.hindi_village || ff.properties.village || '') === (clickVillage || curVillage || ''));
+              // Find by unique polygon id
+              const full = pid
+                ? allFeaturesRef.current.find((ff: PolygonFeature) => String(ff.properties.id) === pid)
+                : allFeaturesRef.current.find((ff: PolygonFeature) =>
+                    String(ff.properties.khasra_no) === ck && String(ff.properties.khewat_no) === cm);
               if (full) n.set(key, full);
             }
             return n;
@@ -855,7 +859,7 @@ export default function ShajraPage() {
               </div>
               <ShajraCanvas
                 features={selectedPlots}
-                selectedKeys={new Set(selected.keys())}
+                selectedKeys={new Set(selectedPlots.map(f => f.properties.khasra_no + '_' + f.properties.khewat_no))}
                 village={selectedVillage}
                 tehsil={tehsil}
                 district={district}
