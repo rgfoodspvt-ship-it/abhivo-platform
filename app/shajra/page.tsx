@@ -59,6 +59,8 @@ export default function ShajraPage() {
   const viewportTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [viewportLoading, setViewportLoading] = useState(false);
   const selectedVillageRef = useRef(selectedVillage);
+  // Track the geographic center of the selected village to handle duplicate village names
+  const villageCenterRef = useRef<{lat: number; lon: number} | null>(null);
 
   // Keep village ref in sync
   useEffect(() => { selectedVillageRef.current = selectedVillage; }, [selectedVillage]);
@@ -197,30 +199,43 @@ export default function ShajraPage() {
         });
 
         // ── Click handler for polygon selection ──
-        // Uses GeoJSON source features directly (no tile clipping for geojson sources)
-        // Key is ALWAYS the database polygon id — globally unique, no collisions
+        // Key is ALWAYS the database polygon id — globally unique
+        // Uses geographic proximity to handle duplicate village names (e.g., खुर्मपुर in 2 tehsils)
         map.on('click', 'plots-fill', (e: any) => {
           const f = e.features?.[0];
           if (!f?.properties || !f?.geometry) return;
           const pid = f.properties.id;
-          if (!pid) return; // skip polygons without database id
-
+          if (!pid) return;
           const clickVillage = f.properties.hindi_village || f.properties.village || '';
-          if (!clickVillage) return; // skip polygons without village name
+          if (!clickVillage) return;
+
+          // Get click location for proximity check
+          const clickLat = parseFloat(f.properties.centroid_lat) || e.lngLat.lat;
+          const clickLon = parseFloat(f.properties.centroid_lon) || e.lngLat.lng;
 
           const curVillage = selectedVillageRef.current;
+          const center = villageCenterRef.current;
           const key = String(pid);
 
-          // Build a clean feature object from the map event
           const feature: PolygonFeature = {
             geometry: f.geometry,
             properties: { ...f.properties, area_acres: f.properties.area_acres || (f.properties.area_sqyd ? f.properties.area_sqyd / 4840 : 0) }
           };
 
-          // Different village → clear everything and start fresh
-          if (curVillage && clickVillage !== curVillage) {
+          // Check if this click is near the current selection center (within ~5km = 0.05°)
+          const isNearCurrent = center
+            ? (Math.abs(clickLat - center.lat) < 0.05 && Math.abs(clickLon - center.lon) < 0.05)
+            : false;
+
+          // Different village OR same village name but far away → clear and start fresh
+          const isDifferentLocation = curVillage && (
+            clickVillage !== curVillage || (center && !isNearCurrent)
+          );
+
+          if (isDifferentLocation) {
             setSelectedVillage(clickVillage);
             selectedVillageRef.current = clickVillage;
+            villageCenterRef.current = { lat: clickLat, lon: clickLon };
             setSelMurabba('');
             const fresh = new Map<string, PolygonFeature>();
             fresh.set(key, feature);
@@ -228,10 +243,11 @@ export default function ShajraPage() {
             return;
           }
 
-          // First click → set village
+          // First click → set village and center
           if (!curVillage) {
             setSelectedVillage(clickVillage);
             selectedVillageRef.current = clickVillage;
+            villageCenterRef.current = { lat: clickLat, lon: clickLon };
           }
 
           // Toggle selection
@@ -329,6 +345,9 @@ export default function ShajraPage() {
       setFeatures([]);
       const src = mapObj.getSource('plots');
       if (src) src.setData({ type: 'FeatureCollection', features: [] });
+
+      // Set village center for proximity checks
+      villageCenterRef.current = { lat: centroid.lat, lon: centroid.lon };
 
       // Fly to centroid — moveend event will trigger viewport polygon loading
       mapObj.flyTo({ center: [centroid.lon, centroid.lat], zoom: 15, duration: 1500 });
