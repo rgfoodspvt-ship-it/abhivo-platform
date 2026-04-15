@@ -515,33 +515,37 @@ export default function ShajraPage() {
     return acc;
   }, {} as Record<string, PolygonFeature[]>);
 
-  // V3 area lookup: murabba_parentKhasra → {kanal, marla, totalMarla}
-  const v3AreaMap: Record<string, {kanal: number; marla: number; totalMarla: number}> = {};
-  let totalMarlaAll = 0;
-  if (v3Data?.plots) {
+  // V3 area: directly compute from v3Data each render
+  function getV3Area(murabba: string, khasraNo: string) {
+    if (!v3Data?.plots?.length) return { kanal: 0, marla: 0, totalMarla: 0 };
+    const parentK = khasraNo.split('/')[0];
+    let totalM = 0;
     const seen = new Set<string>();
     for (const p of v3Data.plots) {
+      if (p.murabba !== murabba) continue;
+      if (p.khasra.split('/')[0] !== parentK) continue;
       const sk = p.murabba + '//' + p.khasra;
       if (seen.has(sk)) continue; seen.add(sk);
-      const m = (p.area_kanal || 0) * 20 + (p.area_marla || 0);
-      const pk = p.murabba + '_' + p.khasra.split('/')[0];
-      if (!v3AreaMap[pk]) v3AreaMap[pk] = { kanal: 0, marla: 0, totalMarla: 0 };
-      v3AreaMap[pk].totalMarla += m;
-      v3AreaMap[pk].kanal = Math.floor(v3AreaMap[pk].totalMarla / 20);
-      v3AreaMap[pk].marla = v3AreaMap[pk].totalMarla % 20;
-      if (selectedMurabbas.has(p.murabba)) totalMarlaAll += m;
+      totalM += (p.area_kanal || 0) * 20 + (p.area_marla || 0);
+    }
+    return { kanal: Math.floor(totalM / 20), marla: totalM % 20, totalMarla: totalM };
+  }
+
+  // Total area for all selected plots from v3Data
+  let _totalMarlaAll = 0;
+  if (v3Data?.plots?.length) {
+    const seen = new Set<string>();
+    for (const p of v3Data.plots) {
+      if (!selectedMurabbas.has(p.murabba)) continue;
+      const sk = p.murabba + '//' + p.khasra;
+      if (seen.has(sk)) continue; seen.add(sk);
+      _totalMarlaAll += (p.area_kanal || 0) * 20 + (p.area_marla || 0);
     }
   }
-  const totalKanal = Math.floor(totalMarlaAll / 20);
-  const totalMarla = totalMarlaAll % 20;
-  const totalAcres = totalMarlaAll * 25.293 / 4047;
-  const totalSqyd = Math.round(totalMarlaAll * 25.293 * 1.196);
-
-  // Helper: get area for a polygon feature from v3Data
-  function getV3Area(f: PolygonFeature) {
-    const pk = f.properties.khewat_no + '_' + f.properties.khasra_no.split('/')[0];
-    return v3AreaMap[pk] || { kanal: 0, marla: 0, totalMarla: 0 };
-  }
+  const totalKanal = Math.floor(_totalMarlaAll / 20);
+  const totalMarla = _totalMarlaAll % 20;
+  const totalAcres = _totalMarlaAll * 25.293 / 4047;
+  const totalSqyd = Math.round(_totalMarlaAll * 25.293 * 1.196);
 
   // Glass style for sidebar elements
   const dd: React.CSSProperties = {
@@ -649,7 +653,7 @@ export default function ShajraPage() {
               <select onChange={e => selectKhasra(e.target.value)} defaultValue="" style={dd}>
                 <option value="">खसरा चुनें ({filteredKhasras.length})</option>
                 {filteredKhasras.map(f => {
-                  const va = getV3Area(f);
+                  const va = getV3Area(f.properties.khewat_no, f.properties.khasra_no);
                   const key = f.properties.khasra_no + '_' + f.properties.khewat_no;
                   const isSelected = selected.has(key);
                   return (
@@ -699,7 +703,7 @@ export default function ShajraPage() {
               <div style={{ maxHeight: 260, overflowY: 'auto' }}>
                 {Object.entries(selectedByMurabba).sort(([a], [b]) => (parseInt(a) || 0) - (parseInt(b) || 0)).map(([m, plots]) => {
                   let mMarlaT = 0;
-                  plots.forEach(f => { mMarlaT += getV3Area(f).totalMarla; });
+                  plots.forEach(f => { mMarlaT += getV3Area(f.properties.khewat_no, f.properties.khasra_no).totalMarla; });
                   const mKanal = Math.floor(mMarlaT / 20), mMarla = mMarlaT % 20;
                   return (
                     <div key={m} style={{ marginBottom: 8 }}>
@@ -708,7 +712,7 @@ export default function ShajraPage() {
                       </div>
                       {plots.map(f => {
                         const key = f.properties.khasra_no + '_' + f.properties.khewat_no;
-                        const va = getV3Area(f);
+                        const va = getV3Area(f.properties.khewat_no, f.properties.khasra_no);
                         return (
                           <div key={key} style={{
                             display: 'flex', justifyContent: 'space-between', alignItems: 'center',
@@ -911,6 +915,13 @@ export default function ShajraPage() {
               )}
               {videoStatus.startsWith('failed') && <p style={{ fontSize: 12, color: '#EF4444' }}>{videoStatus}</p>}
             </div>
+            )}
+
+            {/* No V3 data warning */}
+            {v3Data?.plots?.length === 0 && selected.size > 0 && (
+              <div style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)', borderRadius: 10, padding: '12px 16px', marginBottom: 12, fontSize: 12, color: '#EF4444', textAlign: 'center' }}>
+                इस गांव/मुरब्बा के लिए जमाबंदी डेटा अभी उपलब्ध नहीं है — क्षेत्रफल 0 दिख सकता है
+              </div>
             )}
 
             {/* Stats — from v3Data */}
