@@ -208,16 +208,19 @@ export default function ShajraPage() {
           const cm = String(f.properties.khewat_no ?? '');
           if (!ck || !cm || ck === 'undefined' || cm === 'undefined') return;
 
-          // Village tracking: if clicking a different village, clear selection and switch
+          // Village tracking
           const clickVillage = f.properties.hindi_village || f.properties.village || '';
           const curVillage = selectedVillageRef.current;
+          // Reject polygons with no village name when a village is already selected
+          if (!clickVillage && curVillage) return;
+          // Switching to a different village — clear old selection
           if (clickVillage && curVillage && clickVillage !== curVillage) {
-            // Switching to new village — clear old selection
             setSelected(new Map());
             setSelectedVillage(clickVillage);
             selectedVillageRef.current = clickVillage;
             setSelMurabba('');
           }
+          // First click sets the village
           if (!curVillage && clickVillage) {
             setSelectedVillage(clickVillage);
             selectedVillageRef.current = clickVillage;
