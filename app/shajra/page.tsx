@@ -887,14 +887,29 @@ export default function ShajraPage() {
             </div>
             )}
 
-            {/* Stats */}
+            {/* Stats — compute from v3Data (area_kanal/area_marla) */}
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 24 }}>
-              {[
-                { v: selected.size, l: 'चयनित भूखंड' },
-                { v: `${Math.floor(totalAcres * 8)} कनाल ${Math.round((totalAcres * 8 % 1) * 20)} मरला`, l: 'कुल क्षेत्रफल' },
-                { v: totalAcres.toFixed(2), l: 'एकड़' },
-                { v: Math.round(totalAcres * 4840).toLocaleString(), l: 'वर्ग गज' },
-              ].map(s => (
+              {(() => {
+                const selMurSet = new Set(selectedPlots.map(f => f.properties.khewat_no));
+                let totalMarlaV3 = 0;
+                const seen = new Set<string>();
+                for (const p of (v3Data?.plots || [])) {
+                  if (!selMurSet.has(p.murabba)) continue;
+                  const sk = p.murabba + '//' + p.khasra;
+                  if (seen.has(sk)) continue; seen.add(sk);
+                  totalMarlaV3 += (p.area_kanal || 0) * 20 + (p.area_marla || 0);
+                }
+                const v3Kanal = Math.floor(totalMarlaV3 / 20);
+                const v3Marla = totalMarlaV3 % 20;
+                const v3Acres = totalMarlaV3 * 25.293 / 4047;
+                const v3Sqyd = Math.round(totalMarlaV3 * 25.293 * 1.196);
+                return [
+                  { v: selected.size, l: 'चयनित भूखंड' },
+                  { v: `${v3Kanal} कनाल ${v3Marla} मरला`, l: 'कुल क्षेत्रफल' },
+                  { v: v3Acres.toFixed(2), l: 'एकड़' },
+                  { v: v3Sqyd.toLocaleString(), l: 'वर्ग गज' },
+                ];
+              })().map(s => (
                 <div key={s.l} style={{ background: 'rgba(245,158,11,0.04)', border: '1px solid rgba(245,158,11,0.2)', borderRadius: 10, padding: 14, textAlign: 'center' }}>
                   <div style={{ fontSize: 22, fontWeight: 700, color: '#8B5E00' }}>{s.v}</div>
                   <div style={{ fontSize: 9, color: '#555', textTransform: 'uppercase', letterSpacing: '0.08em' }}>{s.l}</div>
@@ -913,21 +928,33 @@ export default function ShajraPage() {
               </thead>
               <tbody>
                 {Object.entries(selectedByMurabba).sort(([a], [b]) => (parseInt(a) || 0) - (parseInt(b) || 0)).map(([m, plots]) => {
-                  const mAcres = plots.reduce((s, f) => s + (f.properties.area_acres || 0), 0);
+                  // Sum area from v3Data for this murabba
+                  const v3MurPlots = (v3Data?.plots || []).filter(p => p.murabba === m);
+                  let mMarlaTotal = 0;
+                  const mSeen = new Set<string>();
+                  for (const p of v3MurPlots) { const sk = p.murabba+'//'+p.khasra; if (!mSeen.has(sk)) { mSeen.add(sk); mMarlaTotal += (p.area_kanal||0)*20+(p.area_marla||0); } }
+                  const mKanal = Math.floor(mMarlaTotal / 20), mMarla = mMarlaTotal % 20;
                   return [
                     <tr key={`h-${m}`}>
                       <td colSpan={7} style={{ background: 'rgba(245,158,11,0.06)', fontWeight: 700, color: '#8B5E00', fontSize: 11, padding: '8px 12px', border: '1px solid rgba(245,158,11,0.2)' }}>
-                        मुरब्बा {m} — {plots.length} भूखंड · {Math.floor(mAcres*8)} कनाल {Math.round((mAcres*8%1)*20)} मरला
+                        मुरब्बा {m} — {plots.length} भूखंड · {mKanal} कनाल {mMarla} मरला
                       </td>
                     </tr>,
                     ...plots.map((f, i) => {
-                      const a = f.properties.area_acres || 0;
                       const key = f.properties.khasra_no + '_' + f.properties.khewat_no;
                       const owner = ownerData[key];
-                      // Also check V3 data for owners
-                      const v3Plots = v3Data?.plots?.filter(p => p.murabba === f.properties.khewat_no && f.properties.khasra_no.startsWith(p.khasra.split('/')[0])) || [];
-                      const v3Owner = v3Plots.map(p => p.owners).filter(Boolean).join(', ').substring(0, 60);
-                      const v3Khewat = v3Plots[0]?.khewat || '';
+                      // Lookup area from v3Data
+                      const parentK = f.properties.khasra_no.split('/')[0];
+                      const v3Match = v3MurPlots.filter(p => p.khasra.split('/')[0] === parentK);
+                      let rowMarla = 0;
+                      const rSeen = new Set<string>();
+                      for (const p of v3Match) { const sk = p.murabba+'//'+p.khasra; if (!rSeen.has(sk)) { rSeen.add(sk); rowMarla += (p.area_kanal||0)*20+(p.area_marla||0); } }
+                      const rowKanal = Math.floor(rowMarla / 20), rowMar = rowMarla % 20;
+                      const rowAcres = rowMarla * 25.293 / 4047;
+                      const rowSqyd = Math.round(rowMarla * 25.293 * 1.196);
+                      // Owners from v3
+                      const v3Owner = v3Match.map(p => p.owners).filter(Boolean).join(', ').substring(0, 60);
+                      const v3Khewat = v3Match[0]?.khewat || '';
                       const displayOwner = owner?.owners?.slice(0, 50) || v3Owner || '—';
                       const displayKhewat = owner?.khewat || v3Khewat || '—';
                       return (
@@ -936,9 +963,9 @@ export default function ShajraPage() {
                           <td style={{ border: '1px solid #ddd', padding: '6px 8px', textAlign: 'center', fontWeight: 700 }}>
                             <span style={{ color: '#B47708' }}>{m}//</span>{f.properties.khasra_no}
                           </td>
-                          <td style={{ border: '1px solid #ddd', padding: '6px 8px', textAlign: 'right', fontWeight: 600 }}>{Math.floor(a * 8)}-{Math.round((a * 8 % 1) * 20)}</td>
-                          <td style={{ border: '1px solid #ddd', padding: '6px 8px', textAlign: 'right', color: '#555' }}>{a.toFixed(3)}</td>
-                          <td style={{ border: '1px solid #ddd', padding: '6px 8px', textAlign: 'right' }}>{Math.round(a * 4840).toLocaleString()}</td>
+                          <td style={{ border: '1px solid #ddd', padding: '6px 8px', textAlign: 'right', fontWeight: 600 }}>{rowKanal}-{rowMar}</td>
+                          <td style={{ border: '1px solid #ddd', padding: '6px 8px', textAlign: 'right', color: '#555' }}>{rowAcres.toFixed(3)}</td>
+                          <td style={{ border: '1px solid #ddd', padding: '6px 8px', textAlign: 'right' }}>{rowSqyd.toLocaleString()}</td>
                           <td style={{ border: '1px solid #ddd', padding: '6px 8px', textAlign: 'center', fontWeight: 600 }}>{displayKhewat}</td>
                           <td style={{ border: '1px solid #ddd', padding: '6px 8px', fontSize: 11, color: '#333' }}>{displayOwner}</td>
                         </tr>
