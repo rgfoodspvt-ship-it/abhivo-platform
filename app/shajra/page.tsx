@@ -523,7 +523,11 @@ export default function ShajraPage() {
 
   const selectedPlots = [...selected.values()];
   const selectedMurabbas = new Set(selectedPlots.map(f => f.properties.khewat_no));
-  const reportFeatures = features.filter(f => selectedMurabbas.has(f.properties.khewat_no));
+  const reportVillage = selectedVillage || selectedPlots[0]?.properties?.hindi_village || selectedPlots[0]?.properties?.village || '';
+  const reportFeatures = features.filter(f =>
+    selectedMurabbas.has(f.properties.khewat_no) &&
+    (!reportVillage || (f.properties.hindi_village || f.properties.village || '') === reportVillage)
+  );
   const totalAcres = selectedPlots.reduce((s, f) => s + (f.properties.area_acres || 0), 0);
   const selectedByMurabba = selectedPlots.reduce((acc, f) => {
     const m = f.properties.khewat_no;
