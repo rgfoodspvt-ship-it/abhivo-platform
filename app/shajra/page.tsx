@@ -58,6 +58,10 @@ export default function ShajraPage() {
   const allFeaturesRef = useRef<PolygonFeature[]>([]);
   const viewportTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [viewportLoading, setViewportLoading] = useState(false);
+  const selectedVillageRef = useRef(selectedVillage);
+
+  // Keep village ref in sync
+  useEffect(() => { selectedVillageRef.current = selectedVillage; }, [selectedVillage]);
 
   // Load districts
   useEffect(() => { getDistricts().then(d => setDistricts(d.districts)); }, []);
@@ -203,22 +207,23 @@ export default function ShajraPage() {
           const ck = String(f.properties.khasra_no ?? '');
           const cm = String(f.properties.khewat_no ?? '');
           if (!ck || !cm || ck === 'undefined' || cm === 'undefined') return;
-          // Cross-village guard: only select polygons from current village
+
+          // Cross-village guard
           const clickVillage = f.properties.hindi_village || f.properties.village || '';
-          // If no village selected yet, set it from first click
-          setSelectedVillage(prev => {
-            if (!prev && clickVillage) return clickVillage;
-            return prev;
-          });
-          // Block selection of polygons from other villages
-          // (uses a ref check since setSelectedVillage is async)
+          const curVillage = selectedVillageRef.current;
+          if (curVillage && clickVillage && clickVillage !== curVillage) return;
+          if (!curVillage && clickVillage) {
+            setSelectedVillage(clickVillage);
+            selectedVillageRef.current = clickVillage;
+          }
+
           const key = ck + '_' + cm;
           setSelected(prev => {
             const n = new Map(prev);
             if (n.has(key)) n.delete(key); else {
-              // Find full feature from allFeaturesRef
               const full = allFeaturesRef.current.find((ff: PolygonFeature) =>
-                String(ff.properties.khasra_no) === ck && String(ff.properties.khewat_no) === cm);
+                String(ff.properties.khasra_no) === ck && String(ff.properties.khewat_no) === cm
+                && (ff.properties.hindi_village || ff.properties.village || '') === (clickVillage || curVillage || ''));
               if (full) n.set(key, full);
             }
             return n;
