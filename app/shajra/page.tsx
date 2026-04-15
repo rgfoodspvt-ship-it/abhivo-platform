@@ -508,13 +508,40 @@ export default function ShajraPage() {
   const selectedPlots = [...selected.values()];
   const selectedMurabbas = new Set(selectedPlots.map(f => f.properties.khewat_no));
   const reportFeatures = features.filter(f => selectedMurabbas.has(f.properties.khewat_no));
-  const totalAcres = selectedPlots.reduce((s, f) => s + (f.properties.area_acres || (f.properties.area_sqyd ? f.properties.area_sqyd / 4840 : 0)), 0);
   const selectedByMurabba = selectedPlots.reduce((acc, f) => {
     const m = f.properties.khewat_no;
     if (!acc[m]) acc[m] = [];
     acc[m].push(f);
     return acc;
   }, {} as Record<string, PolygonFeature[]>);
+
+  // V3 area lookup: murabba_parentKhasra → {kanal, marla, totalMarla}
+  const v3AreaMap: Record<string, {kanal: number; marla: number; totalMarla: number}> = {};
+  let totalMarlaAll = 0;
+  if (v3Data?.plots) {
+    const seen = new Set<string>();
+    for (const p of v3Data.plots) {
+      const sk = p.murabba + '//' + p.khasra;
+      if (seen.has(sk)) continue; seen.add(sk);
+      const m = (p.area_kanal || 0) * 20 + (p.area_marla || 0);
+      const pk = p.murabba + '_' + p.khasra.split('/')[0];
+      if (!v3AreaMap[pk]) v3AreaMap[pk] = { kanal: 0, marla: 0, totalMarla: 0 };
+      v3AreaMap[pk].totalMarla += m;
+      v3AreaMap[pk].kanal = Math.floor(v3AreaMap[pk].totalMarla / 20);
+      v3AreaMap[pk].marla = v3AreaMap[pk].totalMarla % 20;
+      if (selectedMurabbas.has(p.murabba)) totalMarlaAll += m;
+    }
+  }
+  const totalKanal = Math.floor(totalMarlaAll / 20);
+  const totalMarla = totalMarlaAll % 20;
+  const totalAcres = totalMarlaAll * 25.293 / 4047;
+  const totalSqyd = Math.round(totalMarlaAll * 25.293 * 1.196);
+
+  // Helper: get area for a polygon feature from v3Data
+  function getV3Area(f: PolygonFeature) {
+    const pk = f.properties.khewat_no + '_' + f.properties.khasra_no.split('/')[0];
+    return v3AreaMap[pk] || { kanal: 0, marla: 0, totalMarla: 0 };
+  }
 
   // Glass style for sidebar elements
   const dd: React.CSSProperties = {
@@ -622,13 +649,12 @@ export default function ShajraPage() {
               <select onChange={e => selectKhasra(e.target.value)} defaultValue="" style={dd}>
                 <option value="">खसरा चुनें ({filteredKhasras.length})</option>
                 {filteredKhasras.map(f => {
-                  const a = f.properties.area_acres || 0;
-                  const kanal = Math.floor(a * 8), marla = Math.round((a * 8 % 1) * 20);
+                  const va = getV3Area(f);
                   const key = f.properties.khasra_no + '_' + f.properties.khewat_no;
                   const isSelected = selected.has(key);
                   return (
                     <option key={f.properties.khasra_no} value={f.properties.khasra_no}>
-                      {isSelected ? '✓ ' : '  '}{selMurabba}//{f.properties.khasra_no} — {kanal} कनाल {marla} मरला
+                      {isSelected ? '✓ ' : '  '}{selMurabba}//{f.properties.khasra_no} — {va.kanal} कनाल {va.marla} मरला
                     </option>
                   );
                 })}
@@ -664,7 +690,7 @@ export default function ShajraPage() {
                   <div style={{ fontSize: 9, color: '#9C8F7D', textTransform: 'uppercase' }}>भूखंड · Plots</div>
                 </div>
                 <div style={{ background: 'rgba(245,158,11,0.06)', borderRadius: 10, padding: '10px 12px', textAlign: 'center', border: '1px solid rgba(245,158,11,0.1)' }}>
-                  <div style={{ fontSize: 22, fontWeight: 700, color: '#F59E0B' }}>{Math.floor(totalAcres * 8)} कनाल {Math.round((totalAcres * 8 % 1) * 20)} मरला</div>
+                  <div style={{ fontSize: 22, fontWeight: 700, color: '#F59E0B' }}>{totalKanal} कनाल {totalMarla} मरला</div>
                   <div style={{ fontSize: 9, color: '#9C8F7D', textTransform: 'uppercase' }}>कुल क्षेत्रफल</div>
                 </div>
               </div>
@@ -672,8 +698,9 @@ export default function ShajraPage() {
               {/* Selected plots grouped by murabba */}
               <div style={{ maxHeight: 260, overflowY: 'auto' }}>
                 {Object.entries(selectedByMurabba).sort(([a], [b]) => (parseInt(a) || 0) - (parseInt(b) || 0)).map(([m, plots]) => {
-                  const mAcres = plots.reduce((s, f) => s + (f.properties.area_acres || 0), 0);
-                  const mKanal = Math.floor(mAcres * 8), mMarla = Math.round((mAcres * 8 % 1) * 20);
+                  let mMarlaT = 0;
+                  plots.forEach(f => { mMarlaT += getV3Area(f).totalMarla; });
+                  const mKanal = Math.floor(mMarlaT / 20), mMarla = mMarlaT % 20;
                   return (
                     <div key={m} style={{ marginBottom: 8 }}>
                       <div style={{ fontSize: 10, fontWeight: 700, color: '#F59E0B', marginBottom: 4, fontFamily: 'monospace' }}>
@@ -681,8 +708,7 @@ export default function ShajraPage() {
                       </div>
                       {plots.map(f => {
                         const key = f.properties.khasra_no + '_' + f.properties.khewat_no;
-                        const a = f.properties.area_acres || 0;
-                        const kanal = Math.floor(a * 8), marla = Math.round((a * 8 % 1) * 20);
+                        const va = getV3Area(f);
                         return (
                           <div key={key} style={{
                             display: 'flex', justifyContent: 'space-between', alignItems: 'center',
@@ -691,7 +717,7 @@ export default function ShajraPage() {
                           }}>
                             <span>
                               <span style={{ color: '#F59E0B', fontWeight: 700 }}>{m}//{f.properties.khasra_no}</span>
-                              <span style={{ color: '#9C8F7D', marginLeft: 8 }}>{kanal} कनाल {marla} मरला</span>
+                              <span style={{ color: '#9C8F7D', marginLeft: 8 }}>{va.kanal} कनाल {va.marla} मरला</span>
                             </span>
                             <button onClick={() => setSelected(prev => { const n = new Map(prev); n.delete(key); return n; })}
                               style={{ color: '#9C8F7D', background: 'none', border: 'none', cursor: 'pointer', fontSize: 12 }}>✕</button>
@@ -756,7 +782,7 @@ export default function ShajraPage() {
             color: '#0F0D0A', fontWeight: 700, fontSize: 13,
             boxShadow: '0 4px 16px rgba(245,158,11,0.3)',
           }}>
-            {selected.size} भूखंड · {Math.floor(totalAcres*8)} कनाल {Math.round((totalAcres*8%1)*20)} मरला
+            {selected.size} भूखंड · {totalKanal} कनाल {totalMarla} मरला
           </div>
         )}
       </div>
@@ -887,29 +913,14 @@ export default function ShajraPage() {
             </div>
             )}
 
-            {/* Stats — compute from v3Data (area_kanal/area_marla) */}
+            {/* Stats — from v3Data */}
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 24 }}>
-              {(() => {
-                const selMurSet = new Set(selectedPlots.map(f => f.properties.khewat_no));
-                let totalMarlaV3 = 0;
-                const seen = new Set<string>();
-                for (const p of (v3Data?.plots || [])) {
-                  if (!selMurSet.has(p.murabba)) continue;
-                  const sk = p.murabba + '//' + p.khasra;
-                  if (seen.has(sk)) continue; seen.add(sk);
-                  totalMarlaV3 += (p.area_kanal || 0) * 20 + (p.area_marla || 0);
-                }
-                const v3Kanal = Math.floor(totalMarlaV3 / 20);
-                const v3Marla = totalMarlaV3 % 20;
-                const v3Acres = totalMarlaV3 * 25.293 / 4047;
-                const v3Sqyd = Math.round(totalMarlaV3 * 25.293 * 1.196);
-                return [
-                  { v: selected.size, l: 'चयनित भूखंड' },
-                  { v: `${v3Kanal} कनाल ${v3Marla} मरला`, l: 'कुल क्षेत्रफल' },
-                  { v: v3Acres.toFixed(2), l: 'एकड़' },
-                  { v: v3Sqyd.toLocaleString(), l: 'वर्ग गज' },
-                ];
-              })().map(s => (
+              {[
+                { v: selected.size, l: 'चयनित भूखंड' },
+                { v: `${totalKanal} कनाल ${totalMarla} मरला`, l: 'कुल क्षेत्रफल' },
+                { v: totalAcres.toFixed(2), l: 'एकड़' },
+                { v: totalSqyd.toLocaleString(), l: 'वर्ग गज' },
+              ].map(s => (
                 <div key={s.l} style={{ background: 'rgba(245,158,11,0.04)', border: '1px solid rgba(245,158,11,0.2)', borderRadius: 10, padding: 14, textAlign: 'center' }}>
                   <div style={{ fontSize: 22, fontWeight: 700, color: '#8B5E00' }}>{s.v}</div>
                   <div style={{ fontSize: 9, color: '#555', textTransform: 'uppercase', letterSpacing: '0.08em' }}>{s.l}</div>
