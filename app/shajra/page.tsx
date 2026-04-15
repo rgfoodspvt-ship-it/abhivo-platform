@@ -226,25 +226,28 @@ export default function ShajraPage() {
             selectedVillageRef.current = clickVillage;
           }
 
-          // Use the ACTUAL clicked feature directly — don't search allFeaturesRef
-          // This ensures we get the exact polygon the user clicked, not a same-named one from another village
-          const clickedFeature: PolygonFeature = {
-            geometry: JSON.parse(JSON.stringify(f.geometry)),
-            properties: { ...f.properties }
-          };
-          const pid = String(clickedFeature.properties.id || '');
-          const key = pid ? `${pid}_${ck}_${cm}` : `${ck}_${cm}_${clickVillage}`;
+          // Find FULL feature from allFeaturesRef by id + village (not tile-clipped)
+          const pid = String(f.properties.id || '');
+          const targetVillage = clickVillage || curVillage || '';
+          const full = pid
+            ? allFeaturesRef.current.find((ff: PolygonFeature) =>
+                String(ff.properties.id) === pid)
+            : allFeaturesRef.current.find((ff: PolygonFeature) =>
+                String(ff.properties.khasra_no) === ck
+                && String(ff.properties.khewat_no) === cm
+                && (ff.properties.hindi_village || ff.properties.village || '') === targetVillage);
+          if (!full) return;
+          const key = pid ? `${pid}` : `${ck}_${cm}_${targetVillage}`;
 
           if (isVillageSwitch) {
-            // Start fresh with just this polygon
             const fresh = new Map<string, PolygonFeature>();
-            fresh.set(key, clickedFeature);
+            fresh.set(key, full);
             setSelected(fresh);
           } else {
             setSelected(prev => {
               const n = new Map(prev);
               if (n.has(key)) n.delete(key);
-              else n.set(key, clickedFeature);
+              else n.set(key, full);
               return n;
             });
           }
