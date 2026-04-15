@@ -78,47 +78,38 @@ export default function ShajraPage() {
     if (district && tehsil) getVillages(district, tehsil).then(d => setVillageNames(d.villages));
   }, [district, tehsil]);
 
-  // Viewport polygon loader
+  // Viewport polygon loader — REPLACES source each time (no accumulation)
   const loadViewportPolygons = useCallback(async (map: any) => {
     if (!map) return;
     const zoom = Math.floor(map.getZoom());
-    if (zoom < 12) return; // too zoomed out
+    if (zoom < 12) return;
     const bounds = map.getBounds();
     const url = `${BASE}/map/polygons/viewport?min_lat=${bounds.getSouth()}&min_lon=${bounds.getWest()}&max_lat=${bounds.getNorth()}&max_lon=${bounds.getEast()}&zoom=${zoom}`;
     setViewportLoading(true);
     try {
       const res = await fetch(url);
       const data = await res.json();
-      const newFeatures: PolygonFeature[] = [];
       const mColors = ['#F59E0B','#FBBF24','#B47708','#D4A017','#E8B810','#C49A08','#DBA520','#F0C420',
         '#E8A317','#D4940A','#F5B50B','#C8A208','#E0B020','#D09010','#F0A808','#C4A010'];
-      for (const f of (data.features || [])) {
-        const pid = f.properties?.id;
-        if (pid && !loadedIdsRef.current.has(pid)) {
-          loadedIdsRef.current.add(pid);
-          // Add color
-          let h = 0;
-          const m = f.properties.khewat_no || '0';
-          for (let i = 0; i < m.length; i++) h = (h * 31 + m.charCodeAt(i)) & 0xffff;
-          f.properties._color = mColors[h % mColors.length];
-          // Add area_acres for compatibility with display code
-          if (!f.properties.area_acres && f.properties.area_sqyd) {
-            f.properties.area_acres = f.properties.area_sqyd / 4840;
-          }
-          // Add village alias
-          if (!f.properties.village && f.properties.hindi_village) {
-            f.properties.village = f.properties.hindi_village;
-          }
-          newFeatures.push(f);
+      const viewportFeatures: PolygonFeature[] = (data.features || []).map((f: any) => {
+        let h = 0;
+        const m = f.properties.khewat_no || '0';
+        for (let i = 0; i < m.length; i++) h = (h * 31 + m.charCodeAt(i)) & 0xffff;
+        f.properties._color = mColors[h % mColors.length];
+        if (!f.properties.area_acres && f.properties.area_sqyd) {
+          f.properties.area_acres = f.properties.area_sqyd / 4840;
         }
-      }
-      if (newFeatures.length > 0) {
-        allFeaturesRef.current = [...allFeaturesRef.current, ...newFeatures];
-        setFeatures(allFeaturesRef.current);
-        const src = map.getSource('plots');
-        if (src) {
-          src.setData({ type: 'FeatureCollection', features: allFeaturesRef.current });
+        if (!f.properties.village && f.properties.hindi_village) {
+          f.properties.village = f.properties.hindi_village;
         }
+        return f;
+      });
+      // Replace — only current viewport polygons exist in the source
+      allFeaturesRef.current = viewportFeatures;
+      setFeatures(viewportFeatures);
+      const src = map.getSource('plots');
+      if (src) {
+        src.setData({ type: 'FeatureCollection', features: viewportFeatures });
       }
     } catch (e) { console.warn('Viewport load error:', e); }
     setViewportLoading(false);
