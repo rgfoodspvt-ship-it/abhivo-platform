@@ -1,6 +1,23 @@
 ## NEXT SESSION — START HERE
-Last worked: April 14, 2026
-Stopped at: Video generator produces working MP4 but with simple slide images (not animated scenes)
+Last worked: April 15, 2026
+Stopped at: Viewport polygon loading deployed, video generator v2 with satellite imagery working
+
+### Viewport polygon loading — COMPLETE
+Endpoint: GET /map/polygons/viewport (bbox + zoom params, ST_Intersects + GIST index, LIMIT 2000)
+Endpoint: GET /map/village-centroid (village + district_code → lat/lon)
+Behaviour: loads polygons in current map view, merges as user pans via moveend event
+Village dropdown now navigates only (flyTo centroid), does not trigger polygon load
+Cross-village browsing works seamlessly — pan into neighbouring village = polygons appear
+Nginx updated to route /map/polygons/viewport and /map/village-centroid to API
+
+### AI Video Generator v2 — COMPLETE
+Upgraded from solid-color slides to real satellite imagery + styled Pillow scenes
+Scene 1: Google satellite tiles with polygon overlay (Mercator projection)
+Scene 2: Property info card (Pillow rendered, gold border, structured layout)
+Scene 3: POI distances with color-coded circles (NH/SCH/HSP/STN)
+Scene 4: CTA with ABHIVO branding + agent contact
+Fonts: NotoSans-Bold (Latin) + NotoSansDevanagari-Bold (Hindi)
+File: /home/rgfoodspvt/land-api/video_gen.py
 
 IMMEDIATE NEXT TASK:
 Upgrade video generator from simple slides to richer visuals.
@@ -36,6 +53,7 @@ Frontend: Next.js on GCP port 3001
 Backend: FastAPI/uvicorn on GCP port 8000
 Database: PostgreSQL on GCP (10.160.0.4 internal)
 Proxy: Nginx on port 80
+Remote: GitHub: rgfoodspvt-ship-it/abhivo-platform
 
 ### Working Features (DO NOT TOUCH unless asked)
 - /shajra — 2D patwari-style shajra drawing (ShajraCanvas.tsx, rough.js) — has खसरा mode AND खेवट mode

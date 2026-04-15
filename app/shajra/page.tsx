@@ -5,6 +5,8 @@ import ShajraCanvas from '@/components/ShajraCanvas';
 import dynamic from 'next/dynamic';
 const BirdsEyeView = dynamic(() => import('@/components/BirdsEyeView'), { ssr: false });
 
+const BASE = process.env.NEXT_PUBLIC_API_URL || 'http://34.47.173.239';
+
 interface PolygonFeature {
   geometry: { coordinates: any; type: string };
   properties: { khasra_no: string; khewat_no: string; area_acres?: number; village?: string; tehsil?: string; [key: string]: any };
@@ -51,6 +53,12 @@ export default function ShajraPage() {
   const [murabbaList, setMurabbaList] = useState<{murabba:string;khasras:number;acres:number}[]>([]);
   const filteredKhasras = selMurabba ? features.filter(f => f.properties.khewat_no === selMurabba) : [];
 
+  // Viewport-based polygon loading
+  const loadedIdsRef = useRef<Set<number>>(new Set());
+  const allFeaturesRef = useRef<PolygonFeature[]>([]);
+  const viewportTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [viewportLoading, setViewportLoading] = useState(false);
+
   // Load districts
   useEffect(() => { getDistricts().then(d => setDistricts(d.districts)); }, []);
   // Tehsils — filter Hindi only
@@ -63,6 +71,50 @@ export default function ShajraPage() {
   useEffect(() => {
     if (district && tehsil) getVillages(district, tehsil).then(d => setVillageNames(d.villages));
   }, [district, tehsil]);
+
+  // Viewport polygon loader
+  const loadViewportPolygons = useCallback(async (map: any) => {
+    if (!map) return;
+    const zoom = Math.floor(map.getZoom());
+    if (zoom < 12) return; // too zoomed out
+    const bounds = map.getBounds();
+    const url = `${BASE}/map/polygons/viewport?min_lat=${bounds.getSouth()}&min_lon=${bounds.getWest()}&max_lat=${bounds.getNorth()}&max_lon=${bounds.getEast()}&zoom=${zoom}`;
+    setViewportLoading(true);
+    try {
+      const res = await fetch(url);
+      const data = await res.json();
+      const newFeatures: PolygonFeature[] = [];
+      const mColors = ['#F59E0B','#FBBF24','#B47708','#D4A017','#E8B810','#C49A08','#DBA520','#F0C420',
+        '#E8A317','#D4940A','#F5B50B','#C8A208','#E0B020','#D09010','#F0A808','#C4A010'];
+      for (const f of (data.features || [])) {
+        const pid = f.properties?.id;
+        if (pid && !loadedIdsRef.current.has(pid)) {
+          loadedIdsRef.current.add(pid);
+          // Add color
+          let h = 0;
+          const m = f.properties.khewat_no || '0';
+          for (let i = 0; i < m.length; i++) h = (h * 31 + m.charCodeAt(i)) & 0xffff;
+          f.properties._color = mColors[h % mColors.length];
+          newFeatures.push(f);
+        }
+      }
+      if (newFeatures.length > 0) {
+        allFeaturesRef.current = [...allFeaturesRef.current, ...newFeatures];
+        setFeatures(allFeaturesRef.current);
+        const src = map.getSource('plots');
+        if (src) {
+          src.setData({ type: 'FeatureCollection', features: allFeaturesRef.current });
+        }
+      }
+    } catch (e) { console.warn('Viewport load error:', e); }
+    setViewportLoading(false);
+  }, []);
+
+  // Debounced viewport load trigger
+  const scheduleViewportLoad = useCallback((map: any) => {
+    if (viewportTimerRef.current) clearTimeout(viewportTimerRef.current);
+    viewportTimerRef.current = setTimeout(() => loadViewportPolygons(map), 300);
+  }, [loadViewportPolygons]);
 
   // Init map
   useEffect(() => {
@@ -89,11 +141,101 @@ export default function ShajraPage() {
           'https://bhuvan-vec1.nrsc.gov.in/bhuvan/wms?service=WMS&version=1.1.1&request=GetMap&layers=mmi:HR_ROAD_NETWORK_Q4_2022&bbox={bbox-epsg-3857}&width=256&height=256&srs=EPSG:3857&format=image/png&transparent=true'
         ], tileSize: 256 });
         map.addLayer({ id: 'bhuvan-roads-layer', type: 'raster', source: 'bhuvan-roads', paint: { 'raster-opacity': 0.35 } });
+
+        // ── Permanent polygon layers (initially empty) ──
+        map.addSource('plots', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+        map.addLayer({ id: 'plots-fill', type: 'fill', source: 'plots', paint: {
+          'fill-color': ['coalesce', ['get', '_color'], '#F59E0B'],
+          'fill-opacity': 0.25
+        }});
+        map.addLayer({ id: 'plots-line', type: 'line', source: 'plots', paint: {
+          'line-color': '#F5F0E8', 'line-width': 1.5, 'line-opacity': 0.7
+        }});
+        map.addLayer({ id: 'plots-labels', type: 'symbol', source: 'plots',
+          layout: {
+            'text-field': ['concat', ['get', 'khewat_no'], '//', ['get', 'khasra_no']],
+            'text-size': ['interpolate', ['linear'], ['zoom'], 13, 7, 16, 11, 18, 15],
+            'text-allow-overlap': false,
+          },
+          paint: {
+            'text-color': '#F5F0E8',
+            'text-halo-color': 'rgba(15,13,10,0.8)',
+            'text-halo-width': 1.5,
+          }
+        });
+
+        // ── Selected plots layers ──
+        map.addSource('selected-plots', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+        map.addLayer({ id: 'sel-glow', type: 'line', source: 'selected-plots', paint: {
+          'line-color': '#F59E0B', 'line-width': 6, 'line-opacity': 0.3, 'line-blur': 4
+        }});
+        map.addLayer({ id: 'sel-fill', type: 'fill', source: 'selected-plots', paint: {
+          'fill-color': '#FBBF24', 'fill-opacity': 0.6
+        }});
+        map.addLayer({ id: 'sel-line', type: 'line', source: 'selected-plots', paint: {
+          'line-color': '#F59E0B', 'line-width': 4, 'line-opacity': 1.0
+        }});
+        map.addLayer({ id: 'sel-labels', type: 'symbol', source: 'selected-plots',
+          layout: {
+            'text-field': ['concat', ['get', 'khewat_no'], '//', ['get', 'khasra_no']],
+            'text-size': 14, 'text-allow-overlap': true, 'text-font': ['Open Sans Bold'],
+          },
+          paint: { 'text-color': '#F59E0B', 'text-halo-color': 'rgba(15,13,10,0.9)', 'text-halo-width': 2 }
+        });
+
+        // ── Click handler for polygon selection ──
+        map.on('click', 'plots-fill', (e: any) => {
+          let f = e.features?.[0];
+          if (!f?.properties) {
+            const bbox: [any, any] = [[e.point.x - 5, e.point.y - 5], [e.point.x + 5, e.point.y + 5]];
+            const hits = map.queryRenderedFeatures(bbox, { layers: ['plots-fill'] });
+            f = hits?.[0];
+          }
+          if (!f?.properties) return;
+          const ck = String(f.properties.khasra_no ?? '');
+          const cm = String(f.properties.khewat_no ?? '');
+          if (!ck || !cm || ck === 'undefined' || cm === 'undefined') return;
+          const key = ck + '_' + cm;
+          setSelected(prev => {
+            const n = new Map(prev);
+            if (n.has(key)) n.delete(key); else {
+              // Find full feature from allFeaturesRef
+              const full = allFeaturesRef.current.find((ff: PolygonFeature) =>
+                String(ff.properties.khasra_no) === ck && String(ff.properties.khewat_no) === cm);
+              if (full) n.set(key, full);
+            }
+            return n;
+          });
+        });
+
+        // Hover handlers
+        map.on('mouseenter', 'plots-fill', () => { map.getCanvas().style.cursor = 'pointer'; });
+        map.on('mouseleave', 'plots-fill', () => { map.getCanvas().style.cursor = ''; });
+
+        // Popup on hover
+        const popup = new maplibregl.Popup({ closeButton: false, closeOnClick: false, offset: 10 });
+        map.on('mousemove', 'plots-fill', (e: any) => {
+          const f = e.features?.[0];
+          if (!f) return;
+          const sqyd = parseFloat(f.properties.area_sqyd) || 0;
+          const k = Math.floor(sqyd / 605.857), m = Math.round((sqyd / 605.857 % 1) * 20);
+          const village = f.properties.hindi_village || '';
+          popup.setLngLat(e.lngLat).setHTML(
+            `<div style="font-size:12px;line-height:1.4;background:#1A1714;color:#F5F0E8;padding:8px 12px;border-radius:8px;border:1px solid rgba(245,158,11,0.15)">
+              <strong style="color:#F59E0B">${f.properties.khewat_no}//${f.properties.khasra_no}</strong><br>
+              ${k} कनाल ${m} मरला${village ? `<br><span style="color:#9C8F7D;font-size:10px">${village}</span>` : ''}
+            </div>`
+          ).addTo(map);
+        });
+        map.on('mouseleave', 'plots-fill', () => popup.remove());
+
+        // ── Viewport-based loading on pan/zoom ──
+        map.on('moveend', () => scheduleViewportLoad(map));
       });
       map.addControl(new maplibregl.NavigationControl(), 'bottom-right');
       setMapObj(map);
     });
-  }, []);
+  }, [scheduleViewportLoad]);
 
   // Zoom to murabba when selected
   useEffect(() => {
@@ -134,97 +276,27 @@ export default function ShajraPage() {
 
   async function loadVillage(vName: string) {
     if (!mapObj || !vName) return;
-    setSelectedVillage(vName); setLoading(true); setLoadingStage('मुरब्बा सूची लोड हो रही है...'); setSelected(new Map()); setSelMurabba('');
+    setSelectedVillage(vName); setLoading(true); setLoadingStage('गांव ढूंढ रहे हैं...'); setSelected(new Map()); setSelMurabba('');
     try {
-      // Step 1: Load murabba list + neighbors (fast, no geometry)
-      const [mData, nData] = await Promise.all([
+      // Step 1: Load murabba list + neighbors + centroid in parallel
+      const [mData, nData, centroid] = await Promise.all([
         fetchAPI<{count:number;murabbas:{murabba:string;khasras:number;acres:number}[]}>(`/map/murabbas?village=${encodeURIComponent(vName)}&district=${encodeURIComponent(district)}`).catch(() => ({count:0, murabbas:[]})),
         fetchAPI<{neighbors:{name:string;direction:string}[]}>(`/map/neighbors?village=${encodeURIComponent(vName)}&district=${encodeURIComponent(district)}`).catch(() => ({neighbors:[]})),
+        fetchAPI<{lat:number;lon:number}>(`/map/village-centroid?village=${encodeURIComponent(vName)}&district_code=18`).catch(() => ({lat:29.0, lon:76.9})),
       ]);
       setMurabbaList(mData.murabbas || []);
       setNeighborData(nData.neighbors || []);
 
-      // Step 2: Load polygons (slower)
-      setLoadingStage('भूखंड नक्शे लोड हो रहे हैं...');
-      const data = await getPolygons(vName, district);
-      // Filter: only if polygons span very wide (>0.2° = ~20km) — duplicate village in different location
-      let filteredFeats = data.features;
-      if (filteredFeats.length > 10) {
-        const centroids = filteredFeats.map((f: any) => {
-          const ring = f.geometry?.type === 'MultiPolygon' ? f.geometry.coordinates[0]?.[0] : f.geometry?.coordinates?.[0];
-          if (!ring) return [0, 0];
-          return [ring.reduce((s: number, c: number[]) => s + c[0], 0) / ring.length, ring.reduce((s: number, c: number[]) => s + c[1], 0) / ring.length];
-        });
-        const lngs = centroids.map((c: number[]) => c[0]).filter((v: number) => v > 0);
-        const lngSpan = Math.max(...lngs) - Math.min(...lngs);
-        if (lngSpan > 0.2) {
-          // Very wide span = duplicate village names in different locations
-          const sorted = [...lngs].sort((a, b) => a - b);
-          const medLng = sorted[Math.floor(sorted.length / 2)];
-          filteredFeats = filteredFeats.filter((_: any, i: number) => Math.abs(centroids[i][0] - medLng) < 0.08);
-        }
-      }
-      setFeatures(filteredFeats);
+      // Step 2: Clear existing polygons and fly to village centroid
+      setLoadingStage('नक्शा पर जा रहे हैं...');
+      loadedIdsRef.current.clear();
+      allFeaturesRef.current = [];
+      setFeatures([]);
+      const src = mapObj.getSource('plots');
+      if (src) src.setData({ type: 'FeatureCollection', features: [] });
 
-      setLoadingStage('नक्शा बना रहे हैं...');
-      mapObj.resize();
-
-      // Remove old layers
-      ['sel-labels', 'sel-line', 'sel-fill', 'sel-glow', 'plots-labels', 'plots-line', 'plots-fill'].forEach(l => { if (mapObj.getLayer(l)) mapObj.removeLayer(l); });
-      if (mapObj.getSource('selected-plots')) mapObj.removeSource('selected-plots');
-      if (mapObj.getSource('plots')) mapObj.removeSource('plots');
-
-      // Add color property — amber palette
-      const mColors = ['#F59E0B','#FBBF24','#B47708','#D4A017','#E8B810','#C49A08','#DBA520','#F0C420',
-        '#E8A317','#D4940A','#F5B50B','#C8A208','#E0B020','#D09010','#F0A808','#C4A010'];
-      const coloredFeatures = data.features.map((f: PolygonFeature) => {
-        let h = 0;
-        const m = f.properties.khewat_no || '0';
-        for (let i = 0; i < m.length; i++) h = (h * 31 + m.charCodeAt(i)) & 0xffff;
-        return { ...f, properties: { ...f.properties, _color: mColors[h % mColors.length] } };
-      });
-
-      mapObj.addSource('plots', { type: 'geojson', data: { type: 'FeatureCollection', features: coloredFeatures } });
-
-      // Plot fill
-      mapObj.addLayer({ id: 'plots-fill', type: 'fill', source: 'plots', paint: {
-        'fill-color': ['case', ['==', ['get', '_selected'], 1], '#FBBF24', ['get', '_color']],
-        'fill-opacity': ['case', ['==', ['get', '_selected'], 1], 0.6, 0.25]
-      }});
-
-      // Plot borders — cream/amber
-      mapObj.addLayer({ id: 'plots-line', type: 'line', source: 'plots', paint: {
-        'line-color': ['case', ['==', ['get', '_selected'], 1], '#F59E0B', '#F5F0E8'],
-        'line-width': ['case', ['==', ['get', '_selected'], 1], 4, 1.5],
-        'line-opacity': ['case', ['==', ['get', '_selected'], 1], 1.0, 0.7]
-      }});
-
-      // Labels — murabba//khasra
-      mapObj.addLayer({ id: 'plots-labels', type: 'symbol', source: 'plots',
-        layout: {
-          'text-field': ['concat', ['get', 'khewat_no'], '//', ['get', 'khasra_no']],
-          'text-size': ['interpolate', ['linear'], ['zoom'], 13, 7, 16, 11, 18, 15],
-          'text-allow-overlap': false,
-        },
-        paint: {
-          'text-color': '#F5F0E8',
-          'text-halo-color': 'rgba(15,13,10,0.8)',
-          'text-halo-width': 1.5,
-        }
-      });
-
-      // Fit bounds
-      try {
-        const coords = data.features.flatMap((f: PolygonFeature) => {
-          const c = f.geometry?.coordinates;
-          if (!c) return [];
-          return f.geometry.type === 'MultiPolygon' ? c.flat(1).flat(0) : c[0] || [];
-        }).filter((c: number[]) => Array.isArray(c) && c.length >= 2 && isFinite(c[0]) && isFinite(c[1]));
-        if (coords.length) {
-          const lngs = coords.map((c: number[]) => c[0]), lats = coords.map((c: number[]) => c[1]);
-          mapObj.fitBounds([[Math.min(...lngs), Math.min(...lats)], [Math.max(...lngs), Math.max(...lats)]], { padding: 50 });
-        }
-      } catch (e) { console.warn('fitBounds:', e); }
+      // Fly to centroid — moveend event will trigger viewport polygon loading
+      mapObj.flyTo({ center: [centroid.lon, centroid.lat], zoom: 15, duration: 1500 });
 
       // Field paths — background load
       setTimeout(async () => { try {
@@ -253,85 +325,7 @@ export default function ShajraPage() {
         }
       } catch (e) { console.log('Paths:', e); } }, 100);
 
-      // Selected plots highlight layer
-      mapObj.addSource('selected-plots', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
-      mapObj.addLayer({ id: 'sel-glow', type: 'line', source: 'selected-plots', paint: {
-        'line-color': '#F59E0B', 'line-width': 6, 'line-opacity': 0.3, 'line-blur': 4
-      }});
-      mapObj.addLayer({ id: 'sel-fill', type: 'fill', source: 'selected-plots', paint: {
-        'fill-color': '#FBBF24', 'fill-opacity': 0.6
-      }});
-      mapObj.addLayer({ id: 'sel-line', type: 'line', source: 'selected-plots', paint: {
-        'line-color': '#F59E0B', 'line-width': 4, 'line-opacity': 1.0
-      }});
-      mapObj.addLayer({ id: 'sel-labels', type: 'symbol', source: 'selected-plots',
-        layout: {
-          'text-field': ['concat', ['get', 'khewat_no'], '//', ['get', 'khasra_no']],
-          'text-size': 14, 'text-allow-overlap': true, 'text-font': ['Open Sans Bold'],
-        },
-        paint: { 'text-color': '#F59E0B', 'text-halo-color': 'rgba(15,13,10,0.9)', 'text-halo-width': 2 }
-      });
-
-      // Click handler
-      if ((mapObj as any)._shajraClick) {
-        try { mapObj.off('click', 'plots-fill', (mapObj as any)._shajraClick); } catch {}
-      }
-      if ((mapObj as any)._shajraEnter) {
-        try { mapObj.off('mouseenter', 'plots-fill', (mapObj as any)._shajraEnter); } catch {}
-      }
-      if ((mapObj as any)._shajraLeave) {
-        try { mapObj.off('mouseleave', 'plots-fill', (mapObj as any)._shajraLeave); } catch {}
-      }
-
-      const clickHandler = (e: any) => {
-        let f = e.features?.[0];
-        if (!f?.properties) {
-          const bbox: [any, any] = [[e.point.x - 5, e.point.y - 5], [e.point.x + 5, e.point.y + 5]];
-          const hits = mapObj.queryRenderedFeatures(bbox, { layers: ['plots-fill'] });
-          f = hits?.[0];
-        }
-        if (!f?.properties) return;
-        const ck = String(f.properties.khasra_no ?? '');
-        const cm = String(f.properties.khewat_no ?? '');
-        if (!ck || !cm || ck === 'undefined' || cm === 'undefined') return;
-        const key = ck + '_' + cm;
-        setSelected(prev => {
-          const n = new Map(prev);
-          if (n.has(key)) n.delete(key); else {
-            const full = data.features.find((ff: PolygonFeature) =>
-              String(ff.properties.khasra_no) === ck && String(ff.properties.khewat_no) === cm);
-            if (full) n.set(key, full);
-          }
-          return n;
-        });
-      };
-      (mapObj as any)._shajraClick = clickHandler;
-      mapObj.on('click', 'plots-fill', clickHandler);
-
-      const enterHandler = () => { mapObj.getCanvas().style.cursor = 'pointer'; };
-      const leaveHandler = () => { mapObj.getCanvas().style.cursor = ''; };
-      (mapObj as any)._shajraEnter = enterHandler;
-      (mapObj as any)._shajraLeave = leaveHandler;
-      mapObj.on('mouseenter', 'plots-fill', enterHandler);
-      mapObj.on('mouseleave', 'plots-fill', leaveHandler);
-
-      // Popup on hover
-      const popup = new (await import('maplibre-gl')).Popup({ closeButton: false, closeOnClick: false, offset: 10 });
-      mapObj.on('mousemove', 'plots-fill', (e: any) => {
-        const f = e.features?.[0];
-        if (!f) return;
-        const a = parseFloat(f.properties.area_acres) || 0;
-        const k = Math.floor(a * 8), m = Math.round((a * 8 % 1) * 20);
-        const key = f.properties.khasra_no + '_' + f.properties.khewat_no;
-        popup.setLngLat(e.lngLat).setHTML(
-          `<div style="font-size:12px;line-height:1.4;background:#1A1714;color:#F5F0E8;padding:8px 12px;border-radius:8px;border:1px solid rgba(245,158,11,0.15)">
-            <strong style="color:#F59E0B">${f.properties.khewat_no}//${f.properties.khasra_no}</strong><br>
-            ${k} कनाल ${m} मरला<br>
-            <span style="color:#9C8F7D;font-size:10px">${selected.has(key) ? '✓ चयनित' : 'क्लिक करें'}</span>
-          </div>`
-        ).addTo(mapObj);
-      });
-      mapObj.on('mouseleave', 'plots-fill', () => popup.remove());
+      // Layers are now initialized in map.on('load') — no need to recreate them
     } catch (e) { console.error(e); }
     setLoading(false);
   }
@@ -340,7 +334,7 @@ export default function ShajraPage() {
   function selectKhasra(khasraNo: string) {
     if (!khasraNo || !selMurabba) return;
     const key = khasraNo + '_' + selMurabba;
-    const feat = features.find(f => f.properties.khasra_no === khasraNo && f.properties.khewat_no === selMurabba);
+    const feat = allFeaturesRef.current.find(f => f.properties.khasra_no === khasraNo && f.properties.khewat_no === selMurabba);
     if (feat) {
       setSelected(prev => { const n = new Map(prev); n.set(key, feat); return n; });
       if (mapObj && feat.geometry) {
@@ -714,6 +708,25 @@ export default function ShajraPage() {
       {/* ===== MAP ===== */}
       <div style={{ flex: 1, position: 'relative', minHeight: '100%' }}>
         <div ref={mapRef} style={{ width: '100%', height: '100%', position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }} />
+
+        {/* Viewport loading indicator */}
+        {viewportLoading && (
+          <div style={{
+            position: 'absolute', top: 12, right: 60, zIndex: 20,
+            padding: '6px 14px', borderRadius: 8,
+            background: 'rgba(15,13,10,0.85)', backdropFilter: 'blur(8px)',
+            border: '1px solid rgba(245,158,11,0.15)',
+            display: 'flex', alignItems: 'center', gap: 8,
+            fontSize: 12, color: '#F59E0B',
+          }}>
+            <div style={{
+              width: 14, height: 14, border: '2px solid rgba(245,158,11,0.3)',
+              borderTop: '2px solid #F59E0B', borderRadius: '50%',
+              animation: 'spin 0.8s linear infinite',
+            }} />
+            भूखंड लोड हो रहे हैं...
+          </div>
+        )}
 
         {/* Village badge */}
         {selectedVillage && (
