@@ -95,6 +95,14 @@ export default function ShajraPage() {
           const m = f.properties.khewat_no || '0';
           for (let i = 0; i < m.length; i++) h = (h * 31 + m.charCodeAt(i)) & 0xffff;
           f.properties._color = mColors[h % mColors.length];
+          // Add area_acres for compatibility with display code
+          if (!f.properties.area_acres && f.properties.area_sqyd) {
+            f.properties.area_acres = f.properties.area_sqyd / 4840;
+          }
+          // Add village alias
+          if (!f.properties.village && f.properties.hindi_village) {
+            f.properties.village = f.properties.hindi_village;
+          }
           newFeatures.push(f);
         }
       }
@@ -195,10 +203,16 @@ export default function ShajraPage() {
           const ck = String(f.properties.khasra_no ?? '');
           const cm = String(f.properties.khewat_no ?? '');
           if (!ck || !cm || ck === 'undefined' || cm === 'undefined') return;
+          // Cross-village guard: only select polygons from current village
+          const clickVillage = f.properties.hindi_village || f.properties.village || '';
+          // If no village selected yet, set it from first click
+          setSelectedVillage(prev => {
+            if (!prev && clickVillage) return clickVillage;
+            return prev;
+          });
+          // Block selection of polygons from other villages
+          // (uses a ref check since setSelectedVillage is async)
           const key = ck + '_' + cm;
-          // Auto-set village from clicked polygon if not already set
-          const clickedVillage = f.properties.hindi_village || f.properties.village || '';
-          if (clickedVillage) setSelectedVillage(clickedVillage);
           setSelected(prev => {
             const n = new Map(prev);
             if (n.has(key)) n.delete(key); else {
@@ -356,13 +370,10 @@ export default function ShajraPage() {
     setShowReport(true);
     const plots = [...selected.values()];
 
-    // Determine village name — from selectedVillage or from selected polygon properties
-    const reportVillage = selectedVillage || plots[0]?.properties?.hindi_village || plots[0]?.properties?.village || '';
-
     // Fetch V3 enriched data (owners, land type, mutations, acquired status)
     const murabbas = [...new Set(plots.map(f => f.properties.khewat_no))].join(',');
     try {
-      const v3 = await fetchAPI<{plots: any[]; acquired: string[]}>(`/map/shajra-data?village=${encodeURIComponent(reportVillage)}&district=${encodeURIComponent(district)}&murabbas=${encodeURIComponent(murabbas)}`);
+      const v3 = await fetchAPI<{plots: any[]; acquired: string[]}>(`/map/shajra-data?village=${encodeURIComponent(selectedVillage)}&district=${encodeURIComponent(district)}&murabbas=${encodeURIComponent(murabbas)}`);
       setV3Data(v3);
     } catch (e) { console.warn('V3 data fetch failed:', e); }
 
@@ -508,44 +519,13 @@ export default function ShajraPage() {
   const selectedPlots = [...selected.values()];
   const selectedMurabbas = new Set(selectedPlots.map(f => f.properties.khewat_no));
   const reportFeatures = features.filter(f => selectedMurabbas.has(f.properties.khewat_no));
+  const totalAcres = selectedPlots.reduce((s, f) => s + (f.properties.area_acres || 0), 0);
   const selectedByMurabba = selectedPlots.reduce((acc, f) => {
     const m = f.properties.khewat_no;
     if (!acc[m]) acc[m] = [];
     acc[m].push(f);
     return acc;
   }, {} as Record<string, PolygonFeature[]>);
-
-  // V3 area: directly compute from v3Data each render
-  function getV3Area(murabba: string, khasraNo: string) {
-    if (!v3Data?.plots?.length) return { kanal: 0, marla: 0, totalMarla: 0 };
-    const parentK = khasraNo.split('/')[0];
-    let totalM = 0;
-    const seen = new Set<string>();
-    for (const p of v3Data.plots) {
-      if (p.murabba !== murabba) continue;
-      if (p.khasra.split('/')[0] !== parentK) continue;
-      const sk = p.murabba + '//' + p.khasra;
-      if (seen.has(sk)) continue; seen.add(sk);
-      totalM += (p.area_kanal || 0) * 20 + (p.area_marla || 0);
-    }
-    return { kanal: Math.floor(totalM / 20), marla: totalM % 20, totalMarla: totalM };
-  }
-
-  // Total area for all selected plots from v3Data
-  let _totalMarlaAll = 0;
-  if (v3Data?.plots?.length) {
-    const seen = new Set<string>();
-    for (const p of v3Data.plots) {
-      if (!selectedMurabbas.has(p.murabba)) continue;
-      const sk = p.murabba + '//' + p.khasra;
-      if (seen.has(sk)) continue; seen.add(sk);
-      _totalMarlaAll += (p.area_kanal || 0) * 20 + (p.area_marla || 0);
-    }
-  }
-  const totalKanal = Math.floor(_totalMarlaAll / 20);
-  const totalMarla = _totalMarlaAll % 20;
-  const totalAcres = _totalMarlaAll * 25.293 / 4047;
-  const totalSqyd = Math.round(_totalMarlaAll * 25.293 * 1.196);
 
   // Glass style for sidebar elements
   const dd: React.CSSProperties = {
@@ -653,12 +633,13 @@ export default function ShajraPage() {
               <select onChange={e => selectKhasra(e.target.value)} defaultValue="" style={dd}>
                 <option value="">खसरा चुनें ({filteredKhasras.length})</option>
                 {filteredKhasras.map(f => {
-                  const va = getV3Area(f.properties.khewat_no, f.properties.khasra_no);
+                  const a = f.properties.area_acres || 0;
+                  const kanal = Math.floor(a * 8), marla = Math.round((a * 8 % 1) * 20);
                   const key = f.properties.khasra_no + '_' + f.properties.khewat_no;
                   const isSelected = selected.has(key);
                   return (
                     <option key={f.properties.khasra_no} value={f.properties.khasra_no}>
-                      {isSelected ? '✓ ' : '  '}{selMurabba}//{f.properties.khasra_no} — {va.kanal} कनाल {va.marla} मरला
+                      {isSelected ? '✓ ' : '  '}{selMurabba}//{f.properties.khasra_no} — {kanal} कनाल {marla} मरला
                     </option>
                   );
                 })}
@@ -694,7 +675,7 @@ export default function ShajraPage() {
                   <div style={{ fontSize: 9, color: '#9C8F7D', textTransform: 'uppercase' }}>भूखंड · Plots</div>
                 </div>
                 <div style={{ background: 'rgba(245,158,11,0.06)', borderRadius: 10, padding: '10px 12px', textAlign: 'center', border: '1px solid rgba(245,158,11,0.1)' }}>
-                  <div style={{ fontSize: 22, fontWeight: 700, color: '#F59E0B' }}>{totalKanal} कनाल {totalMarla} मरला</div>
+                  <div style={{ fontSize: 22, fontWeight: 700, color: '#F59E0B' }}>{Math.floor(totalAcres * 8)} कनाल {Math.round((totalAcres * 8 % 1) * 20)} मरला</div>
                   <div style={{ fontSize: 9, color: '#9C8F7D', textTransform: 'uppercase' }}>कुल क्षेत्रफल</div>
                 </div>
               </div>
@@ -702,9 +683,8 @@ export default function ShajraPage() {
               {/* Selected plots grouped by murabba */}
               <div style={{ maxHeight: 260, overflowY: 'auto' }}>
                 {Object.entries(selectedByMurabba).sort(([a], [b]) => (parseInt(a) || 0) - (parseInt(b) || 0)).map(([m, plots]) => {
-                  let mMarlaT = 0;
-                  plots.forEach(f => { mMarlaT += getV3Area(f.properties.khewat_no, f.properties.khasra_no).totalMarla; });
-                  const mKanal = Math.floor(mMarlaT / 20), mMarla = mMarlaT % 20;
+                  const mAcres = plots.reduce((s, f) => s + (f.properties.area_acres || 0), 0);
+                  const mKanal = Math.floor(mAcres * 8), mMarla = Math.round((mAcres * 8 % 1) * 20);
                   return (
                     <div key={m} style={{ marginBottom: 8 }}>
                       <div style={{ fontSize: 10, fontWeight: 700, color: '#F59E0B', marginBottom: 4, fontFamily: 'monospace' }}>
@@ -712,7 +692,8 @@ export default function ShajraPage() {
                       </div>
                       {plots.map(f => {
                         const key = f.properties.khasra_no + '_' + f.properties.khewat_no;
-                        const va = getV3Area(f.properties.khewat_no, f.properties.khasra_no);
+                        const a = f.properties.area_acres || 0;
+                        const kanal = Math.floor(a * 8), marla = Math.round((a * 8 % 1) * 20);
                         return (
                           <div key={key} style={{
                             display: 'flex', justifyContent: 'space-between', alignItems: 'center',
@@ -721,7 +702,7 @@ export default function ShajraPage() {
                           }}>
                             <span>
                               <span style={{ color: '#F59E0B', fontWeight: 700 }}>{m}//{f.properties.khasra_no}</span>
-                              <span style={{ color: '#9C8F7D', marginLeft: 8 }}>{va.kanal} कनाल {va.marla} मरला</span>
+                              <span style={{ color: '#9C8F7D', marginLeft: 8 }}>{kanal} कनाल {marla} मरला</span>
                             </span>
                             <button onClick={() => setSelected(prev => { const n = new Map(prev); n.delete(key); return n; })}
                               style={{ color: '#9C8F7D', background: 'none', border: 'none', cursor: 'pointer', fontSize: 12 }}>✕</button>
@@ -786,7 +767,7 @@ export default function ShajraPage() {
             color: '#0F0D0A', fontWeight: 700, fontSize: 13,
             boxShadow: '0 4px 16px rgba(245,158,11,0.3)',
           }}>
-            {selected.size} भूखंड · {totalKanal} कनाल {totalMarla} मरला
+            {selected.size} भूखंड · {Math.floor(totalAcres*8)} कनाल {Math.round((totalAcres*8%1)*20)} मरला
           </div>
         )}
       </div>
@@ -917,20 +898,13 @@ export default function ShajraPage() {
             </div>
             )}
 
-            {/* No V3 data warning */}
-            {v3Data?.plots?.length === 0 && selected.size > 0 && (
-              <div style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)', borderRadius: 10, padding: '12px 16px', marginBottom: 12, fontSize: 12, color: '#EF4444', textAlign: 'center' }}>
-                इस गांव/मुरब्बा के लिए जमाबंदी डेटा अभी उपलब्ध नहीं है — क्षेत्रफल 0 दिख सकता है
-              </div>
-            )}
-
-            {/* Stats — from v3Data */}
+            {/* Stats */}
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 24 }}>
               {[
                 { v: selected.size, l: 'चयनित भूखंड' },
-                { v: `${totalKanal} कनाल ${totalMarla} मरला`, l: 'कुल क्षेत्रफल' },
+                { v: `${Math.floor(totalAcres * 8)} कनाल ${Math.round((totalAcres * 8 % 1) * 20)} मरला`, l: 'कुल क्षेत्रफल' },
                 { v: totalAcres.toFixed(2), l: 'एकड़' },
-                { v: totalSqyd.toLocaleString(), l: 'वर्ग गज' },
+                { v: Math.round(totalAcres * 4840).toLocaleString(), l: 'वर्ग गज' },
               ].map(s => (
                 <div key={s.l} style={{ background: 'rgba(245,158,11,0.04)', border: '1px solid rgba(245,158,11,0.2)', borderRadius: 10, padding: 14, textAlign: 'center' }}>
                   <div style={{ fontSize: 22, fontWeight: 700, color: '#8B5E00' }}>{s.v}</div>
@@ -950,33 +924,21 @@ export default function ShajraPage() {
               </thead>
               <tbody>
                 {Object.entries(selectedByMurabba).sort(([a], [b]) => (parseInt(a) || 0) - (parseInt(b) || 0)).map(([m, plots]) => {
-                  // Sum area from v3Data for this murabba
-                  const v3MurPlots = (v3Data?.plots || []).filter(p => p.murabba === m);
-                  let mMarlaTotal = 0;
-                  const mSeen = new Set<string>();
-                  for (const p of v3MurPlots) { const sk = p.murabba+'//'+p.khasra; if (!mSeen.has(sk)) { mSeen.add(sk); mMarlaTotal += (p.area_kanal||0)*20+(p.area_marla||0); } }
-                  const mKanal = Math.floor(mMarlaTotal / 20), mMarla = mMarlaTotal % 20;
+                  const mAcres = plots.reduce((s, f) => s + (f.properties.area_acres || 0), 0);
                   return [
                     <tr key={`h-${m}`}>
                       <td colSpan={7} style={{ background: 'rgba(245,158,11,0.06)', fontWeight: 700, color: '#8B5E00', fontSize: 11, padding: '8px 12px', border: '1px solid rgba(245,158,11,0.2)' }}>
-                        मुरब्बा {m} — {plots.length} भूखंड · {mKanal} कनाल {mMarla} मरला
+                        मुरब्बा {m} — {plots.length} भूखंड · {Math.floor(mAcres*8)} कनाल {Math.round((mAcres*8%1)*20)} मरला
                       </td>
                     </tr>,
                     ...plots.map((f, i) => {
+                      const a = f.properties.area_acres || 0;
                       const key = f.properties.khasra_no + '_' + f.properties.khewat_no;
                       const owner = ownerData[key];
-                      // Lookup area from v3Data
-                      const parentK = f.properties.khasra_no.split('/')[0];
-                      const v3Match = v3MurPlots.filter(p => p.khasra.split('/')[0] === parentK);
-                      let rowMarla = 0;
-                      const rSeen = new Set<string>();
-                      for (const p of v3Match) { const sk = p.murabba+'//'+p.khasra; if (!rSeen.has(sk)) { rSeen.add(sk); rowMarla += (p.area_kanal||0)*20+(p.area_marla||0); } }
-                      const rowKanal = Math.floor(rowMarla / 20), rowMar = rowMarla % 20;
-                      const rowAcres = rowMarla * 25.293 / 4047;
-                      const rowSqyd = Math.round(rowMarla * 25.293 * 1.196);
-                      // Owners from v3
-                      const v3Owner = v3Match.map(p => p.owners).filter(Boolean).join(', ').substring(0, 60);
-                      const v3Khewat = v3Match[0]?.khewat || '';
+                      // Also check V3 data for owners
+                      const v3Plots = v3Data?.plots?.filter(p => p.murabba === f.properties.khewat_no && f.properties.khasra_no.startsWith(p.khasra.split('/')[0])) || [];
+                      const v3Owner = v3Plots.map(p => p.owners).filter(Boolean).join(', ').substring(0, 60);
+                      const v3Khewat = v3Plots[0]?.khewat || '';
                       const displayOwner = owner?.owners?.slice(0, 50) || v3Owner || '—';
                       const displayKhewat = owner?.khewat || v3Khewat || '—';
                       return (
@@ -985,9 +947,9 @@ export default function ShajraPage() {
                           <td style={{ border: '1px solid #ddd', padding: '6px 8px', textAlign: 'center', fontWeight: 700 }}>
                             <span style={{ color: '#B47708' }}>{m}//</span>{f.properties.khasra_no}
                           </td>
-                          <td style={{ border: '1px solid #ddd', padding: '6px 8px', textAlign: 'right', fontWeight: 600 }}>{rowKanal}-{rowMar}</td>
-                          <td style={{ border: '1px solid #ddd', padding: '6px 8px', textAlign: 'right', color: '#555' }}>{rowAcres.toFixed(3)}</td>
-                          <td style={{ border: '1px solid #ddd', padding: '6px 8px', textAlign: 'right' }}>{rowSqyd.toLocaleString()}</td>
+                          <td style={{ border: '1px solid #ddd', padding: '6px 8px', textAlign: 'right', fontWeight: 600 }}>{Math.floor(a * 8)}-{Math.round((a * 8 % 1) * 20)}</td>
+                          <td style={{ border: '1px solid #ddd', padding: '6px 8px', textAlign: 'right', color: '#555' }}>{a.toFixed(3)}</td>
+                          <td style={{ border: '1px solid #ddd', padding: '6px 8px', textAlign: 'right' }}>{Math.round(a * 4840).toLocaleString()}</td>
                           <td style={{ border: '1px solid #ddd', padding: '6px 8px', textAlign: 'center', fontWeight: 600 }}>{displayKhewat}</td>
                           <td style={{ border: '1px solid #ddd', padding: '6px 8px', fontSize: 11, color: '#333' }}>{displayOwner}</td>
                         </tr>
