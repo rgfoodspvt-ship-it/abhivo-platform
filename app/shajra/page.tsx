@@ -208,22 +208,27 @@ export default function ShajraPage() {
           const cm = String(f.properties.khewat_no ?? '');
           if (!ck || !cm || ck === 'undefined' || cm === 'undefined') return;
 
-          // Cross-village guard
+          // Village tracking: if clicking a different village, clear selection and switch
           const clickVillage = f.properties.hindi_village || f.properties.village || '';
           const curVillage = selectedVillageRef.current;
-          if (curVillage && clickVillage && clickVillage !== curVillage) return;
+          if (clickVillage && curVillage && clickVillage !== curVillage) {
+            // Switching to new village — clear old selection
+            setSelected(new Map());
+            setSelectedVillage(clickVillage);
+            selectedVillageRef.current = clickVillage;
+            setSelMurabba('');
+          }
           if (!curVillage && clickVillage) {
             setSelectedVillage(clickVillage);
             selectedVillageRef.current = clickVillage;
           }
 
-          // Use polygon id as unique key to avoid cross-village collisions
+          // Use polygon id as unique key
           const pid = String(f.properties.id || '');
           const key = pid ? `${pid}_${ck}_${cm}` : `${ck}_${cm}`;
           setSelected(prev => {
             const n = new Map(prev);
             if (n.has(key)) n.delete(key); else {
-              // Find by unique polygon id
               const full = pid
                 ? allFeaturesRef.current.find((ff: PolygonFeature) => String(ff.properties.id) === pid)
                 : allFeaturesRef.current.find((ff: PolygonFeature) =>
