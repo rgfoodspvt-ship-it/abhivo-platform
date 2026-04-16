@@ -275,9 +275,8 @@ export default function ShajraCanvas({ features, selectedKeys, village, tehsil, 
         ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
         ctx.fillStyle = '#000'; ctx.fillText(label, lx, ly);
 
-        // AREA — kanal-marla below khasra (strip sub-khasra to match v3Map key)
-        const parentKhasra = f.properties.khasra_no.split('/')[0];
-        const pk = f.properties.khewat_no+'_'+parentKhasra;
+        // AREA — kanal-marla below khasra
+        const pk = f.properties.khewat_no+'_'+f.properties.khasra_no;
         const v3 = v3Map[pk];
         if (v3 && v3.totalMarla > 0) {
           const afs = Math.max(11, Math.round(fs*0.38));
