@@ -172,8 +172,12 @@ export default function ShajraPage() {
           .then(data => {
             if (!map.getSource('village-boundaries')) {
               map.addSource('village-boundaries', { type: 'geojson', data });
+              // Transparent fill for click target (easier than clicking thin line)
+              map.addLayer({ id: 'vb-fill', type: 'fill', source: 'village-boundaries', paint: {
+                'fill-color': 'transparent', 'fill-opacity': 0
+              }});
               map.addLayer({ id: 'vb-line', type: 'line', source: 'village-boundaries', paint: {
-                'line-color': '#ffffff', 'line-width': 1, 'line-opacity': 0.5
+                'line-color': '#ffffff', 'line-width': 1.5, 'line-opacity': 0.6
               }});
               map.addLayer({ id: 'vb-labels', type: 'symbol', source: 'village-boundaries',
                 layout: {
@@ -208,7 +212,10 @@ export default function ShajraPage() {
         });
 
         // ── Click on village boundary to switch village ──
-        map.on('click', 'vb-line', (e: any) => {
+        map.on('click', 'vb-fill', (e: any) => {
+          // If khasra plots exist at this point, don't switch village (plots-fill handler handles it)
+          const plotHits = map.queryRenderedFeatures(e.point, { layers: ['plots-fill'] });
+          if (plotHits.length > 0) return;
           const f = e.features?.[0];
           if (!f?.properties) return;
           const vName = f.properties.hindi_village;
@@ -227,8 +234,8 @@ export default function ShajraPage() {
         // Hover handlers
         map.on('mouseenter', 'plots-fill', () => { map.getCanvas().style.cursor = 'pointer'; });
         map.on('mouseleave', 'plots-fill', () => { map.getCanvas().style.cursor = ''; });
-        map.on('mouseenter', 'vb-line', () => { map.getCanvas().style.cursor = 'pointer'; });
-        map.on('mouseleave', 'vb-line', () => { map.getCanvas().style.cursor = ''; });
+        map.on('mouseenter', 'vb-fill', () => { map.getCanvas().style.cursor = 'pointer'; });
+        map.on('mouseleave', 'vb-fill', () => { map.getCanvas().style.cursor = ''; });
 
         // Popup on hover
         const popup = new maplibregl.Popup({ closeButton: false, closeOnClick: false, offset: 10 });
