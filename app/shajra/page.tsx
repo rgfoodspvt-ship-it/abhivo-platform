@@ -53,25 +53,10 @@ export default function ShajraPage() {
   const [murabbaList, setMurabbaList] = useState<{murabba:string;khasras:number;acres:number}[]>([]);
   const filteredKhasras = selMurabba ? features.filter(f => f.properties.khewat_no === selMurabba) : [];
 
-  // Viewport-based polygon loading
-  const loadedIdsRef = useRef<Set<number>>(new Set());
+  // Active village tehsil (for disambiguation of duplicate village names)
+  const [activeTehsil, setActiveTehsil] = useState('');
+  const [villageLoading, setVillageLoading] = useState(false);
   const allFeaturesRef = useRef<PolygonFeature[]>([]);
-  const viewportTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [viewportLoading, setViewportLoading] = useState(false);
-
-  // Geography-based selection center (replaces village guard)
-  const selectionCenterRef = useRef<{lat: number; lon: number} | null>(null);
-
-  // Haversine distance in km
-  function haversineKm(lat1: number, lon1: number, lat2: number, lon2: number) {
-    const R = 6371;
-    const dLat = (lat2 - lat1) * Math.PI / 180;
-    const dLon = (lon2 - lon1) * Math.PI / 180;
-    const a = Math.sin(dLat/2)**2 + Math.cos(lat1*Math.PI/180) * Math.cos(lat2*Math.PI/180) * Math.sin(dLon/2)**2;
-    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  }
-
-  // (selectedVillage is now set from clicked polygon, used for display + v3Data fetch only)
 
   // Load districts
   useEffect(() => { getDistricts().then(d => setDistricts(d.districts)); }, []);
@@ -86,48 +71,32 @@ export default function ShajraPage() {
     if (district && tehsil) getVillages(district, tehsil).then(d => setVillageNames(d.villages));
   }, [district, tehsil]);
 
-  // Viewport polygon loader — REPLACES source each time (no accumulation)
-  const loadViewportPolygons = useCallback(async (map: any) => {
-    if (!map) return;
-    const zoom = Math.floor(map.getZoom());
-    if (zoom < 12) return;
-    const bounds = map.getBounds();
-    const url = `${BASE}/map/polygons/viewport?min_lat=${bounds.getSouth()}&min_lon=${bounds.getWest()}&max_lat=${bounds.getNorth()}&max_lon=${bounds.getEast()}&zoom=${zoom}`;
-    setViewportLoading(true);
+  // Load all khasras for a specific village+tehsil (replaces viewport loading)
+  const loadVillageKhasras = useCallback(async (map: any, village: string, villageTehsil: string, dc: string = '18') => {
+    if (!map || !village) return;
+    setVillageLoading(true);
     try {
+      const url = `${BASE}/map/village-khasras?village=${encodeURIComponent(village)}&tehsil=${encodeURIComponent(villageTehsil)}&district_code=${dc}`;
       const res = await fetch(url);
       const data = await res.json();
       const mColors = ['#F59E0B','#FBBF24','#B47708','#D4A017','#E8B810','#C49A08','#DBA520','#F0C420',
         '#E8A317','#D4940A','#F5B50B','#C8A208','#E0B020','#D09010','#F0A808','#C4A010'];
-      const viewportFeatures: PolygonFeature[] = (data.features || []).map((f: any) => {
+      const khasras: PolygonFeature[] = (data.features || []).map((f: any) => {
         let h = 0;
         const m = f.properties.khewat_no || '0';
         for (let i = 0; i < m.length; i++) h = (h * 31 + m.charCodeAt(i)) & 0xffff;
         f.properties._color = mColors[h % mColors.length];
-        if (!f.properties.area_acres && f.properties.area_sqyd) {
-          f.properties.area_acres = f.properties.area_sqyd / 4840;
-        }
-        if (!f.properties.village && f.properties.hindi_village) {
-          f.properties.village = f.properties.hindi_village;
-        }
         return f;
       });
-      // Replace — only current viewport polygons exist in the source
-      allFeaturesRef.current = viewportFeatures;
-      setFeatures(viewportFeatures);
+      allFeaturesRef.current = khasras;
+      setFeatures(khasras);
       const src = map.getSource('plots');
       if (src) {
-        src.setData({ type: 'FeatureCollection', features: viewportFeatures });
+        src.setData({ type: 'FeatureCollection', features: khasras });
       }
-    } catch (e) { console.warn('Viewport load error:', e); }
-    setViewportLoading(false);
+    } catch (e) { console.warn('Village khasra load error:', e); }
+    setVillageLoading(false);
   }, []);
-
-  // Debounced viewport load trigger
-  const scheduleViewportLoad = useCallback((map: any) => {
-    if (viewportTimerRef.current) clearTimeout(viewportTimerRef.current);
-    viewportTimerRef.current = setTimeout(() => loadViewportPolygons(map), 300);
-  }, [loadViewportPolygons]);
 
   // Init map
   useEffect(() => {
@@ -197,61 +166,69 @@ export default function ShajraPage() {
           paint: { 'text-color': '#F59E0B', 'text-halo-color': 'rgba(15,13,10,0.9)', 'text-halo-width': 2 }
         });
 
-        // ── Click handler for polygon selection ──
-        // Key is ALWAYS the database polygon id — globally unique
-        // Uses geographic proximity to handle duplicate village names (e.g., खुर्मपुर in 2 tehsils)
+        // ── Village boundary layer (always visible) ──
+        fetch(`${BASE}/map/village-boundaries?district_code=18`)
+          .then(r => r.json())
+          .then(data => {
+            if (!map.getSource('village-boundaries')) {
+              map.addSource('village-boundaries', { type: 'geojson', data });
+              map.addLayer({ id: 'vb-line', type: 'line', source: 'village-boundaries', paint: {
+                'line-color': '#ffffff', 'line-width': 1, 'line-opacity': 0.5
+              }});
+              map.addLayer({ id: 'vb-labels', type: 'symbol', source: 'village-boundaries',
+                layout: {
+                  'text-field': ['get', 'hindi_village'],
+                  'text-size': ['interpolate', ['linear'], ['zoom'], 10, 8, 14, 12, 16, 14],
+                  'text-allow-overlap': false,
+                },
+                paint: {
+                  'text-color': 'rgba(255,255,255,0.7)',
+                  'text-halo-color': 'rgba(0,0,0,0.8)',
+                  'text-halo-width': 1,
+                },
+                minzoom: 11,
+              });
+            }
+          }).catch(() => {});
+
+        // ── Click handler — single village mode ──
         map.on('click', 'plots-fill', (e: any) => {
           const f = e.features?.[0];
           if (!f?.properties || !f?.geometry) return;
           const pid = f.properties.id;
           if (!pid) return;
-
-          const clickLat = parseFloat(f.properties.centroid_lat) || e.lngLat.lat;
-          const clickLon = parseFloat(f.properties.centroid_lon) || e.lngLat.lng;
           const key = String(pid);
-
-          // Build clean feature from the click event
-          const feature: PolygonFeature = {
-            geometry: f.geometry,
-            properties: {
-              ...f.properties,
-              area_acres: f.properties.area_acres || (f.properties.area_sqyd ? f.properties.area_sqyd / 4840 : 0),
-            }
-          };
-
-          const center = selectionCenterRef.current;
-
-          // RULE: No existing selection → start fresh
-          if (!center) {
-            selectionCenterRef.current = { lat: clickLat, lon: clickLon };
-            setSelectedVillage(f.properties.hindi_village || '');
-            setSelMurabba('');
-            setSelected(new Map([[key, feature]]));
-            return;
-          }
-
-          // RULE: >2km from selection center → clear and start fresh
-          const dist = haversineKm(center.lat, center.lon, clickLat, clickLon);
-          if (dist > 2.0) {
-            selectionCenterRef.current = { lat: clickLat, lon: clickLon };
-            setSelectedVillage(f.properties.hindi_village || '');
-            setSelMurabba('');
-            setSelected(new Map([[key, feature]]));
-            return;
-          }
-
-          // RULE: Within 2km → toggle in/out of selection
+          // Toggle selection within same village — just add/remove
           setSelected(prev => {
             const n = new Map(prev);
             if (n.has(key)) n.delete(key);
-            else n.set(key, feature);
+            else n.set(key, f as PolygonFeature);
             return n;
           });
+        });
+
+        // ── Click on village boundary to switch village ──
+        map.on('click', 'vb-line', (e: any) => {
+          const f = e.features?.[0];
+          if (!f?.properties) return;
+          const vName = f.properties.hindi_village;
+          const tName = f.properties.tehsil_name;
+          if (vName) {
+            setSelected(new Map());
+            setSelMurabba('');
+            setSelectedVillage(vName);
+            setActiveTehsil(tName || '');
+            loadVillageKhasras(map, vName, tName || '', '18');
+            const lat = f.properties.centroid_lat, lon = f.properties.centroid_lon;
+            if (lat && lon) map.flyTo({ center: [lon, lat], zoom: 15, duration: 1200 });
+          }
         });
 
         // Hover handlers
         map.on('mouseenter', 'plots-fill', () => { map.getCanvas().style.cursor = 'pointer'; });
         map.on('mouseleave', 'plots-fill', () => { map.getCanvas().style.cursor = ''; });
+        map.on('mouseenter', 'vb-line', () => { map.getCanvas().style.cursor = 'pointer'; });
+        map.on('mouseleave', 'vb-line', () => { map.getCanvas().style.cursor = ''; });
 
         // Popup on hover
         const popup = new maplibregl.Popup({ closeButton: false, closeOnClick: false, offset: 10 });
@@ -269,14 +246,11 @@ export default function ShajraPage() {
           ).addTo(map);
         });
         map.on('mouseleave', 'plots-fill', () => popup.remove());
-
-        // ── Viewport-based loading on pan/zoom ──
-        map.on('moveend', () => scheduleViewportLoad(map));
       });
       map.addControl(new maplibregl.NavigationControl(), 'bottom-right');
       setMapObj(map);
     });
-  }, [scheduleViewportLoad]);
+  }, [loadVillageKhasras]);
 
   // Zoom to murabba when selected
   useEffect(() => {
@@ -315,9 +289,10 @@ export default function ShajraPage() {
     }
   }, [selMurabba, mapObj, features]);
 
-  async function loadVillage(vName: string) {
+  async function loadVillage(vName: string, tName?: string) {
     if (!mapObj || !vName) return;
-    setSelectedVillage(vName); setLoading(true); setLoadingStage('गांव ढूंढ रहे हैं...'); setSelected(new Map()); setSelMurabba(''); selectionCenterRef.current = null;
+    setSelectedVillage(vName); setActiveTehsil(tName || '');
+    setLoading(true); setLoadingStage('गांव ढूंढ रहे हैं...'); setSelected(new Map()); setSelMurabba('');
     try {
       // Step 1: Load murabba list + neighbors + centroid in parallel
       const [mData, nData, centroid] = await Promise.all([
@@ -328,19 +303,11 @@ export default function ShajraPage() {
       setMurabbaList(mData.murabbas || []);
       setNeighborData(nData.neighbors || []);
 
-      // Step 2: Clear existing polygons and fly to village centroid
-      setLoadingStage('नक्शा पर जा रहे हैं...');
-      loadedIdsRef.current.clear();
-      allFeaturesRef.current = [];
-      setFeatures([]);
-      const src = mapObj.getSource('plots');
-      if (src) src.setData({ type: 'FeatureCollection', features: [] });
+      // Step 2: Load ALL khasras for this village (single load, no viewport)
+      setLoadingStage('भूखंड लोड हो रहे हैं...');
+      await loadVillageKhasras(mapObj, vName, tName || '', '18');
 
-      // Set village center for proximity checks
-      // Set selection center so click handler knows where we are (dropdown = navigation only)
-      selectionCenterRef.current = { lat: centroid.lat, lon: centroid.lon };
-
-      // Fly to centroid — moveend event will trigger viewport polygon loading
+      // Step 3: Fly to centroid
       mapObj.flyTo({ center: [centroid.lon, centroid.lat], zoom: 15, duration: 1500 });
 
       // Field paths — background load
@@ -615,7 +582,7 @@ export default function ShajraPage() {
             <option value="">Tehsil · तहसील</option>
             {tehsils.map(t => <option key={t} value={t}>{t}</option>)}
           </select>
-          <select value={selectedVillage} onChange={e => loadVillage(e.target.value)} style={{ ...dd, marginBottom: 8 }} disabled={!tehsil}>
+          <select value={selectedVillage} onChange={e => loadVillage(e.target.value, tehsil)} style={{ ...dd, marginBottom: 8 }} disabled={!tehsil}>
             <option value="">Village · गाँव ({villageNames.length})</option>
             {villageNames.map(v => <option key={v} value={v}>{v}</option>)}
           </select>
@@ -694,7 +661,7 @@ export default function ShajraPage() {
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
             <label style={{ fontSize: 10, fontWeight: 700, color: '#9C8F7D', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Selected · चयनित</label>
             {selected.size > 0 && (
-              <button onClick={() => { setSelected(new Map()); selectionCenterRef.current = null; }} style={{ fontSize: 11, color: '#9C8F7D', background: 'none', border: 'none', cursor: 'pointer' }}>Clear all</button>
+              <button onClick={() => setSelected(new Map())} style={{ fontSize: 11, color: '#9C8F7D', background: 'none', border: 'none', cursor: 'pointer' }}>Clear all</button>
             )}
           </div>
 
@@ -767,8 +734,8 @@ export default function ShajraPage() {
       <div style={{ flex: 1, position: 'relative', minHeight: '100%' }}>
         <div ref={mapRef} style={{ width: '100%', height: '100%', position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }} />
 
-        {/* Viewport loading indicator */}
-        {viewportLoading && (
+        {/* Village loading indicator */}
+        {villageLoading && (
           <div style={{
             position: 'absolute', top: 12, right: 60, zIndex: 20,
             padding: '6px 14px', borderRadius: 8,

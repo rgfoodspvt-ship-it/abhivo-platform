@@ -2,13 +2,18 @@
 Last worked: April 15, 2026
 Stopped at: Viewport polygon loading deployed, video generator v2 with satellite imagery working
 
-### Viewport polygon loading — COMPLETE
-Endpoint: GET /map/polygons/viewport (bbox + zoom params, ST_Intersects + GIST index, LIMIT 2000)
+### Village-based polygon loading — COMPLETE (replaced viewport loading)
+Endpoint: GET /map/village-boundaries?district_code=18 (convex hull outlines, cached 24h, 321 villages)
+Endpoint: GET /map/village-khasras?village=X&tehsil=Y&district_code=Z (all khasras for one village)
 Endpoint: GET /map/village-centroid (village + district_code → lat/lon)
-Behaviour: loads polygons in current map view, merges as user pans via moveend event
-Village dropdown now navigates only (flyTo centroid), does not trigger polygon load
-Cross-village browsing works seamlessly — pan into neighbouring village = polygons appear
-Nginx updated to route /map/polygons/viewport and /map/village-centroid to API
+Endpoint: GET /map/polygons/viewport (legacy, still works for other pages)
+Behaviour: loads ALL khasras for one village at a time (median 1837, max ~12K)
+Village boundaries always visible as white outlines with labels at zoom 12+
+Click polygon in different village → clears selection, loads new village khasras
+Dropdown = navigation only (flyTo), click handler = village switch
+No moveend/viewport loading — single village load is faster (200ms DB vs repeated viewport queries)
+Index: idx_kp_village_tehsil on (hindi_village, tehsil_name, district_code)
+4 villages with duplicate names across tehsils: village+tehsil is unique key
 
 ### AI Video Generator v2 — COMPLETE
 Upgraded from solid-color slides to real satellite imagery + styled Pillow scenes
