@@ -801,8 +801,8 @@ export default function ShajraPage() {
                 <span style={{ fontSize: 11, fontWeight: 400, color: '#555' }}>मुरब्बा {[...new Set(selectedPlots.map(f => f.properties.khewat_no))].join(', ')}</span>
               </div>
               <ShajraCanvas
-                features={reportFeatures}
-                selectedKeys={new Set(selected.keys())}
+                features={selectedPlots}
+                selectedKeys={new Set(selectedPlots.map(f => f.properties.khasra_no + '_' + f.properties.khewat_no))}
                 village={selectedVillage}
                 tehsil={tehsil}
                 district={district}
