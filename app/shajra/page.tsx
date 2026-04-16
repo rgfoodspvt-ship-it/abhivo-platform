@@ -144,11 +144,13 @@ export default function ShajraPage() {
       setMurabbaList(mData.murabbas || []);
       setNeighborData(nData.neighbors || []);
 
-      // Step 2: Load polygons (slower)
+      // Step 2: Load polygons — use village-khasras endpoint (exact match, fast, no duplicates)
       setLoadingStage('भूखंड नक्शे लोड हो रहे हैं...');
-      const data = await getPolygons(vName, district, tehsil);
-      // Tehsil parameter handles duplicate village names — no client-side filtering needed
-      setFeatures(data.features);
+      const data = await fetchAPI<any>(`/map/village-khasras?village=${encodeURIComponent(vName)}&tehsil=${encodeURIComponent(tehsil)}&district_code=18`);
+      // Add area_acres from area_sqyd for display compatibility
+      const feats = (data.features || []);
+      feats.forEach((f: any) => { if (!f.properties.area_acres && f.properties.area_sqyd) f.properties.area_acres = f.properties.area_sqyd / 4840; });
+      setFeatures(feats);
 
       setLoadingStage('नक्शा बना रहे हैं...');
       mapObj.resize();
@@ -161,7 +163,7 @@ export default function ShajraPage() {
       // Add color property — amber palette
       const mColors = ['#F59E0B','#FBBF24','#B47708','#D4A017','#E8B810','#C49A08','#DBA520','#F0C420',
         '#E8A317','#D4940A','#F5B50B','#C8A208','#E0B020','#D09010','#F0A808','#C4A010'];
-      const coloredFeatures = data.features.map((f: PolygonFeature) => {
+      const coloredFeatures = feats.map((f: PolygonFeature) => {
         let h = 0;
         const m = f.properties.khewat_no || '0';
         for (let i = 0; i < m.length; i++) h = (h * 31 + m.charCodeAt(i)) & 0xffff;
@@ -199,7 +201,7 @@ export default function ShajraPage() {
 
       // Fit bounds
       try {
-        const coords = data.features.flatMap((f: PolygonFeature) => {
+        const coords = feats.flatMap((f: PolygonFeature) => {
           const c = f.geometry?.coordinates;
           if (!c) return [];
           return f.geometry.type === 'MultiPolygon' ? c.flat(1).flat(0) : c[0] || [];
@@ -282,7 +284,7 @@ export default function ShajraPage() {
         setSelected(prev => {
           const n = new Map(prev);
           if (n.has(key)) n.delete(key); else {
-            const full = data.features.find((ff: PolygonFeature) =>
+            const full = feats.find((ff: PolygonFeature) =>
               String(ff.properties.khasra_no) === ck && String(ff.properties.khewat_no) === cm);
             if (full) n.set(key, full);
           }
