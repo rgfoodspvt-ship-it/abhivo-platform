@@ -147,24 +147,8 @@ export default function ShajraPage() {
       // Step 2: Load polygons (slower)
       setLoadingStage('भूखंड नक्शे लोड हो रहे हैं...');
       const data = await getPolygons(vName, district, tehsil);
-      // Filter: only if polygons span very wide (>0.2° = ~20km) — duplicate village in different location
-      let filteredFeats = data.features;
-      if (filteredFeats.length > 10) {
-        const centroids = filteredFeats.map((f: any) => {
-          const ring = f.geometry?.type === 'MultiPolygon' ? f.geometry.coordinates[0]?.[0] : f.geometry?.coordinates?.[0];
-          if (!ring) return [0, 0];
-          return [ring.reduce((s: number, c: number[]) => s + c[0], 0) / ring.length, ring.reduce((s: number, c: number[]) => s + c[1], 0) / ring.length];
-        });
-        const lngs = centroids.map((c: number[]) => c[0]).filter((v: number) => v > 0);
-        const lngSpan = Math.max(...lngs) - Math.min(...lngs);
-        if (lngSpan > 0.2) {
-          // Very wide span = duplicate village names in different locations
-          const sorted = [...lngs].sort((a, b) => a - b);
-          const medLng = sorted[Math.floor(sorted.length / 2)];
-          filteredFeats = filteredFeats.filter((_: any, i: number) => Math.abs(centroids[i][0] - medLng) < 0.08);
-        }
-      }
-      setFeatures(filteredFeats);
+      // Tehsil parameter handles duplicate village names — no client-side filtering needed
+      setFeatures(data.features);
 
       setLoadingStage('नक्शा बना रहे हैं...');
       mapObj.resize();
