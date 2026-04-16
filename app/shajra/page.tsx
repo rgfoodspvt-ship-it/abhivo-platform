@@ -71,32 +71,8 @@ export default function ShajraPage() {
     if (district && tehsil) getVillages(district, tehsil).then(d => setVillageNames(d.villages));
   }, [district, tehsil]);
 
-  // Load all khasras for a specific village+tehsil (replaces viewport loading)
-  const loadVillageKhasras = useCallback(async (map: any, village: string, villageTehsil: string, dc: string = '18') => {
-    if (!map || !village) return;
-    setVillageLoading(true);
-    try {
-      const url = `${BASE}/map/village-khasras?village=${encodeURIComponent(village)}&tehsil=${encodeURIComponent(villageTehsil)}&district_code=${dc}`;
-      const res = await fetch(url);
-      const data = await res.json();
-      const mColors = ['#F59E0B','#FBBF24','#B47708','#D4A017','#E8B810','#C49A08','#DBA520','#F0C420',
-        '#E8A317','#D4940A','#F5B50B','#C8A208','#E0B020','#D09010','#F0A808','#C4A010'];
-      const khasras: PolygonFeature[] = (data.features || []).map((f: any) => {
-        let h = 0;
-        const m = f.properties.khewat_no || '0';
-        for (let i = 0; i < m.length; i++) h = (h * 31 + m.charCodeAt(i)) & 0xffff;
-        f.properties._color = mColors[h % mColors.length];
-        return f;
-      });
-      allFeaturesRef.current = khasras;
-      setFeatures(khasras);
-      const src = map.getSource('plots');
-      if (src) {
-        src.setData({ type: 'FeatureCollection', features: khasras });
-      }
-    } catch (e) { console.warn('Village khasra load error:', e); }
-    setVillageLoading(false);
-  }, []);
+  // Active village ref for map paint expressions
+  const activeVillageRef = useRef('');
 
   // Init map
   useEffect(() => {
@@ -108,101 +84,86 @@ export default function ShajraPage() {
         style: { version: 8, sources: {}, layers: [{ id: 'bg', type: 'background', paint: { 'background-color': '#0F0D0A' } }] },
         center: [76.9, 29.0], zoom: 8,
       });
-      map.on('load', () => {
-        // Satellite tiles
+      map.on('load', async () => {
+        // ── SATELLITE BASEMAP ──
         map.addSource('satellite', { type: 'raster', tiles: [
           'https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}'
         ], tileSize: 256, maxzoom: 20 });
         map.addLayer({ id: 'satellite-layer', type: 'raster', source: 'satellite', paint: { 'raster-opacity': 1 } });
-        // Bhuvan village boundaries
-        map.addSource('bhuvan-vill', { type: 'raster', tiles: [
-          'https://bhuvan-vec1.nrsc.gov.in/bhuvan/wms?service=WMS&version=1.1.1&request=GetMap&layers=basemap:HR_Vill&bbox={bbox-epsg-3857}&width=256&height=256&srs=EPSG:3857&format=image/png&transparent=true'
-        ], tileSize: 256 });
-        map.addLayer({ id: 'bhuvan-vill-layer', type: 'raster', source: 'bhuvan-vill', paint: { 'raster-opacity': 0.3 } });
-        // Bhuvan roads
-        map.addSource('bhuvan-roads', { type: 'raster', tiles: [
-          'https://bhuvan-vec1.nrsc.gov.in/bhuvan/wms?service=WMS&version=1.1.1&request=GetMap&layers=mmi:HR_ROAD_NETWORK_Q4_2022&bbox={bbox-epsg-3857}&width=256&height=256&srs=EPSG:3857&format=image/png&transparent=true'
-        ], tileSize: 256 });
-        map.addLayer({ id: 'bhuvan-roads-layer', type: 'raster', source: 'bhuvan-roads', paint: { 'raster-opacity': 0.35 } });
 
-        // ── Permanent polygon layers (initially empty) ──
-        map.addSource('plots', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
-        map.addLayer({ id: 'plots-fill', type: 'fill', source: 'plots', paint: {
-          'fill-color': ['coalesce', ['get', '_color'], '#F59E0B'],
-          'fill-opacity': 0.25
+        // ── VILLAGE BOUNDARIES (loaded first, always visible) ──
+        try {
+          const vbRes = await fetch(`${BASE}/map/village-boundaries?district_code=18`);
+          const vbData = await vbRes.json();
+          map.addSource('village-boundaries', { type: 'geojson', data: vbData });
+
+          // Amber fill
+          map.addLayer({ id: 'vb-fill', type: 'fill', source: 'village-boundaries', paint: {
+            'fill-color': '#C9922A', 'fill-opacity': 0.10
+          }});
+          // Amber outline
+          map.addLayer({ id: 'vb-line', type: 'line', source: 'village-boundaries', paint: {
+            'line-color': '#C9922A', 'line-width': 1.0, 'line-opacity': 0.8
+          }});
+          // Village name labels
+          map.addLayer({ id: 'vb-labels', type: 'symbol', source: 'village-boundaries',
+            minzoom: 11,
+            layout: {
+              'text-field': ['get', 'hindi_village'],
+              'text-size': ['interpolate', ['linear'], ['zoom'], 11, 9, 14, 12, 16, 14],
+              'text-allow-overlap': false,
+            },
+            paint: {
+              'text-color': '#ffffff',
+              'text-halo-color': '#000000',
+              'text-halo-width': 1.5,
+            }
+          });
+        } catch (e) { console.warn('Village boundaries failed:', e); }
+
+        // ── KHASRA POLYGONS (empty until village selected) ──
+        map.addSource('khasra-polygons', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+        // White outline, no fill
+        map.addLayer({ id: 'khasra-line', type: 'line', source: 'khasra-polygons', paint: {
+          'line-color': '#ffffff', 'line-width': 0.7, 'line-opacity': 0.8
         }});
-        map.addLayer({ id: 'plots-line', type: 'line', source: 'plots', paint: {
-          'line-color': '#F5F0E8', 'line-width': 1.5, 'line-opacity': 0.7
-        }});
-        map.addLayer({ id: 'plots-labels', type: 'symbol', source: 'plots',
+        // Labels
+        map.addLayer({ id: 'khasra-labels', type: 'symbol', source: 'khasra-polygons',
           layout: {
             'text-field': ['concat', ['get', 'khewat_no'], '//', ['get', 'khasra_no']],
             'text-size': ['interpolate', ['linear'], ['zoom'], 13, 7, 16, 11, 18, 15],
             'text-allow-overlap': false,
           },
-          paint: {
-            'text-color': '#F5F0E8',
-            'text-halo-color': 'rgba(15,13,10,0.8)',
-            'text-halo-width': 1.5,
-          }
+          paint: { 'text-color': '#F5F0E8', 'text-halo-color': 'rgba(15,13,10,0.8)', 'text-halo-width': 1.5 }
         });
-
-        // ── Selected plots layers ──
-        map.addSource('selected-plots', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
-        map.addLayer({ id: 'sel-glow', type: 'line', source: 'selected-plots', paint: {
-          'line-color': '#F59E0B', 'line-width': 6, 'line-opacity': 0.3, 'line-blur': 4
+        // Transparent fill for click target
+        map.addLayer({ id: 'khasra-fill', type: 'fill', source: 'khasra-polygons', paint: {
+          'fill-color': 'transparent', 'fill-opacity': 0
         }});
+
+        // ── SELECTED KHASRAS (orange highlight) ──
+        map.addSource('selected-plots', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
         map.addLayer({ id: 'sel-fill', type: 'fill', source: 'selected-plots', paint: {
-          'fill-color': '#FBBF24', 'fill-opacity': 0.6
+          'fill-color': '#E8781A', 'fill-opacity': 0.5
         }});
         map.addLayer({ id: 'sel-line', type: 'line', source: 'selected-plots', paint: {
-          'line-color': '#F59E0B', 'line-width': 4, 'line-opacity': 1.0
+          'line-color': '#F59E0B', 'line-width': 3, 'line-opacity': 1.0
         }});
         map.addLayer({ id: 'sel-labels', type: 'symbol', source: 'selected-plots',
           layout: {
             'text-field': ['concat', ['get', 'khewat_no'], '//', ['get', 'khasra_no']],
-            'text-size': 14, 'text-allow-overlap': true, 'text-font': ['Open Sans Bold'],
+            'text-size': 14, 'text-allow-overlap': true,
           },
           paint: { 'text-color': '#F59E0B', 'text-halo-color': 'rgba(15,13,10,0.9)', 'text-halo-width': 2 }
         });
 
-        // ── Village boundary layer (always visible) ──
-        fetch(`${BASE}/map/village-boundaries?district_code=18`)
-          .then(r => r.json())
-          .then(data => {
-            if (!map.getSource('village-boundaries')) {
-              map.addSource('village-boundaries', { type: 'geojson', data });
-              // Transparent fill for click target (easier than clicking thin line)
-              map.addLayer({ id: 'vb-fill', type: 'fill', source: 'village-boundaries', paint: {
-                'fill-color': 'transparent', 'fill-opacity': 0
-              }});
-              map.addLayer({ id: 'vb-line', type: 'line', source: 'village-boundaries', paint: {
-                'line-color': '#ffffff', 'line-width': 1.5, 'line-opacity': 0.6
-              }});
-              map.addLayer({ id: 'vb-labels', type: 'symbol', source: 'village-boundaries',
-                layout: {
-                  'text-field': ['get', 'hindi_village'],
-                  'text-size': ['interpolate', ['linear'], ['zoom'], 10, 8, 14, 12, 16, 14],
-                  'text-allow-overlap': false,
-                },
-                paint: {
-                  'text-color': 'rgba(255,255,255,0.7)',
-                  'text-halo-color': 'rgba(0,0,0,0.8)',
-                  'text-halo-width': 1,
-                },
-                minzoom: 11,
-              });
-            }
-          }).catch(() => {});
-
-        // ── Click handler — single village mode ──
-        map.on('click', 'plots-fill', (e: any) => {
+        // ── KHASRA CLICK — toggle selection ──
+        map.on('click', 'khasra-fill', (e: any) => {
           const f = e.features?.[0];
           if (!f?.properties || !f?.geometry) return;
           const pid = f.properties.id;
           if (!pid) return;
           const key = String(pid);
-          // Toggle selection within same village — just add/remove
           setSelected(prev => {
             const n = new Map(prev);
             if (n.has(key)) n.delete(key);
@@ -211,35 +172,51 @@ export default function ShajraPage() {
           });
         });
 
-        // ── Click on village boundary to switch village ──
+        // ── VILLAGE BOUNDARY CLICK — switch village ──
         map.on('click', 'vb-fill', (e: any) => {
-          // If khasra plots exist at this point, don't switch village (plots-fill handler handles it)
-          const plotHits = map.queryRenderedFeatures(e.point, { layers: ['plots-fill'] });
-          if (plotHits.length > 0) return;
+          // If khasra exists at this point, khasra-fill handles it
+          const kHits = map.queryRenderedFeatures(e.point, { layers: ['khasra-fill'] });
+          if (kHits.length > 0) return;
           const f = e.features?.[0];
-          if (!f?.properties) return;
+          if (!f?.properties?.hindi_village) return;
           const vName = f.properties.hindi_village;
-          const tName = f.properties.tehsil_name;
-          if (vName) {
-            setSelected(new Map());
-            setSelMurabba('');
-            setSelectedVillage(vName);
-            setActiveTehsil(tName || '');
-            loadVillageKhasras(map, vName, tName || '', '18');
-            const lat = f.properties.centroid_lat, lon = f.properties.centroid_lon;
-            if (lat && lon) map.flyTo({ center: [lon, lat], zoom: 15, duration: 1200 });
-          }
+          const tName = f.properties.tehsil_name || '';
+          // Switch village
+          setSelected(new Map()); setSelMurabba('');
+          setSelectedVillage(vName); setActiveTehsil(tName);
+          activeVillageRef.current = vName;
+          // Fly to village
+          const lat = f.properties.centroid_lat, lon = f.properties.centroid_lon;
+          if (lat && lon) map.flyTo({ center: [lon, lat], zoom: 15, duration: 1200 });
+          // Load khasras
+          setVillageLoading(true);
+          fetch(`${BASE}/map/village-khasras?village=${encodeURIComponent(vName)}&tehsil=${encodeURIComponent(tName)}&district_code=18`)
+            .then(r => r.json())
+            .then(data => {
+              const feats = data.features || [];
+              feats.forEach((ft: any) => { ft.properties.area_acres = ft.properties.area_sqyd ? ft.properties.area_sqyd / 4840 : 0; });
+              allFeaturesRef.current = feats;
+              setFeatures(feats);
+              const src = map.getSource('khasra-polygons') as any;
+              if (src) src.setData({ type: 'FeatureCollection', features: feats });
+              // Highlight selected village boundary
+              map.setPaintProperty('vb-fill', 'fill-opacity', ['case', ['==', ['get', 'hindi_village'], vName], 0.25, 0.10]);
+              map.setPaintProperty('vb-line', 'line-width', ['case', ['==', ['get', 'hindi_village'], vName], 2.5, 1.0]);
+            })
+            .finally(() => setVillageLoading(false));
+          // Load murabba list
+          fetchAPI<{count:number;murabbas:{murabba:string;khasras:number;acres:number}[]}>(`/map/murabbas?village=${encodeURIComponent(vName)}&district=${encodeURIComponent(district)}`).then(d => setMurabbaList(d.murabbas || [])).catch(() => {});
         });
 
-        // Hover handlers
-        map.on('mouseenter', 'plots-fill', () => { map.getCanvas().style.cursor = 'pointer'; });
-        map.on('mouseleave', 'plots-fill', () => { map.getCanvas().style.cursor = ''; });
+        // ── HOVER ──
+        map.on('mouseenter', 'khasra-fill', () => { map.getCanvas().style.cursor = 'pointer'; });
+        map.on('mouseleave', 'khasra-fill', () => { map.getCanvas().style.cursor = ''; });
         map.on('mouseenter', 'vb-fill', () => { map.getCanvas().style.cursor = 'pointer'; });
         map.on('mouseleave', 'vb-fill', () => { map.getCanvas().style.cursor = ''; });
 
-        // Popup on hover
+        // Popup on khasra hover
         const popup = new maplibregl.Popup({ closeButton: false, closeOnClick: false, offset: 10 });
-        map.on('mousemove', 'plots-fill', (e: any) => {
+        map.on('mousemove', 'khasra-fill', (e: any) => {
           const f = e.features?.[0];
           if (!f) return;
           const sqyd = parseFloat(f.properties.area_sqyd) || 0;
@@ -252,14 +229,15 @@ export default function ShajraPage() {
             </div>`
           ).addTo(map);
         });
-        map.on('mouseleave', 'plots-fill', () => popup.remove());
+        map.on('mouseleave', 'khasra-fill', () => popup.remove());
       });
       map.addControl(new maplibregl.NavigationControl(), 'bottom-right');
       setMapObj(map);
     });
-  }, [loadVillageKhasras]);
+  }, []);
 
   // Zoom to murabba when selected
+  // Zoom to murabba when selected from filter
   useEffect(() => {
     if (!mapObj || !selMurabba || !features.length) return;
     const mFeats = features.filter(f => f.properties.khewat_no === selMurabba);
@@ -269,36 +247,11 @@ export default function ShajraPage() {
       const lngs = coords.map(c => c[0]), lats = coords.map(c => c[1]);
       mapObj.fitBounds([[Math.min(...lngs), Math.min(...lats)], [Math.max(...lngs), Math.max(...lats)]], { padding: 60, maxZoom: 17 });
     }
-    // Highlight murabba plots
-    if (mapObj.getLayer('plots-fill')) {
-      mapObj.setPaintProperty('plots-fill', 'fill-color', ['case',
-        ['==', ['get', '_selected'], 1], '#FBBF24',
-        ['get', '_color']
-      ]);
-      mapObj.setPaintProperty('plots-fill', 'fill-opacity', ['case',
-        ['==', ['get', '_selected'], 1], 0.65,
-        ['==', ['get', 'khewat_no'], selMurabba], 0.4,
-        0.08
-      ]);
-    }
-    if (mapObj.getLayer('plots-line')) {
-      mapObj.setPaintProperty('plots-line', 'line-color', ['case',
-        ['==', ['get', '_selected'], 1], '#F59E0B',
-        '#F5F0E8'
-      ]);
-      mapObj.setPaintProperty('plots-line', 'line-width', ['case',
-        ['==', ['get', '_selected'], 1], 4, 2
-      ]);
-      mapObj.setPaintProperty('plots-line', 'line-opacity', ['case',
-        ['==', ['get', '_selected'], 1], 1.0,
-        ['==', ['get', 'khewat_no'], selMurabba], 1, 0.3
-      ]);
-    }
   }, [selMurabba, mapObj, features]);
 
   async function loadVillage(vName: string, tName?: string) {
     if (!mapObj || !vName) return;
-    setSelectedVillage(vName); setActiveTehsil(tName || '');
+    setSelectedVillage(vName); setActiveTehsil(tName || ''); activeVillageRef.current = vName;
     setLoading(true); setLoadingStage('गांव ढूंढ रहे हैं...'); setSelected(new Map()); setSelMurabba('');
     try {
       // Step 1: Load murabba list + neighbors + centroid in parallel
@@ -310,9 +263,24 @@ export default function ShajraPage() {
       setMurabbaList(mData.murabbas || []);
       setNeighborData(nData.neighbors || []);
 
-      // Step 2: Load ALL khasras for this village (single load, no viewport)
+      // Step 2: Load ALL khasras for this village
       setLoadingStage('भूखंड लोड हो रहे हैं...');
-      await loadVillageKhasras(mapObj, vName, tName || '', '18');
+      setVillageLoading(true);
+      const kRes = await fetch(`${BASE}/map/village-khasras?village=${encodeURIComponent(vName)}&tehsil=${encodeURIComponent(tName || '')}&district_code=18`);
+      const kData = await kRes.json();
+      const feats = (kData.features || []);
+      feats.forEach((ft: any) => { ft.properties.area_acres = ft.properties.area_sqyd ? ft.properties.area_sqyd / 4840 : 0; });
+      allFeaturesRef.current = feats;
+      setFeatures(feats);
+      const kSrc = mapObj.getSource('khasra-polygons') as any;
+      if (kSrc) kSrc.setData({ type: 'FeatureCollection', features: feats });
+      setVillageLoading(false);
+
+      // Highlight selected village boundary
+      if (mapObj.getLayer('vb-fill')) {
+        mapObj.setPaintProperty('vb-fill', 'fill-opacity', ['case', ['==', ['get', 'hindi_village'], vName], 0.25, 0.10]);
+        mapObj.setPaintProperty('vb-line', 'line-width', ['case', ['==', ['get', 'hindi_village'], vName], 2.5, 1.0]);
+      }
 
       // Step 3: Fly to centroid
       mapObj.flyTo({ center: [centroid.lon, centroid.lat], zoom: 15, duration: 1500 });
@@ -333,10 +301,10 @@ export default function ShajraPage() {
             'line-color': ['case', ['<=', ['get', 'width'], 3], '#d4a574', ['<=', ['get', 'width'], 6], '#c4956a', '#a07850'],
             'line-width': ['interpolate', ['linear'], ['get', 'width'], 1, 3, 4, 6, 8, 10],
             'line-opacity': 0.4
-          }}, 'plots-fill');
+          }}, 'khasra-line');
           mapObj.addLayer({ id: 'field-paths-line', type: 'line', source: 'field-paths', paint: {
             'line-color': '#B47708', 'line-width': 1, 'line-dasharray': [3, 3], 'line-opacity': 0.6
-          }}, 'plots-fill');
+          }}, 'khasra-line');
           mapObj.addLayer({ id: 'field-paths-labels', type: 'symbol', source: 'field-paths',
             layout: { 'text-field': ['get', 'label'], 'text-size': 9, 'symbol-placement': 'line', 'text-allow-overlap': false },
             paint: { 'text-color': '#D4A574', 'text-halo-color': 'rgba(15,13,10,0.7)', 'text-halo-width': 1 }
@@ -489,42 +457,7 @@ export default function ShajraPage() {
     if (selSrc) {
       selSrc.setData({ type: 'FeatureCollection', features: [...selected.values()] });
     }
-    const plotsSrc = mapObj.getSource('plots') as any;
-    if (!plotsSrc) return;
-    // Build set of selected polygon ids for fast lookup
-    const selIds = new Set([...selected.values()].map(f => String(f.properties.id || '')).filter(Boolean));
-    const mColors = ['#F59E0B','#FBBF24','#B47708','#D4A017','#E8B810','#C49A08','#DBA520','#F0C420',
-      '#E8A317','#D4940A','#F5B50B','#C8A208','#E0B020','#D09010','#F0A808','#C4A010'];
-    const updatedFeatures = features.map(f => {
-      let h = 0;
-      const m = f.properties.khewat_no || '0';
-      for (let i = 0; i < m.length; i++) h = (h * 31 + m.charCodeAt(i)) & 0xffff;
-      const isSelected = selIds.has(String(f.properties.id || ''));
-      return { ...f, properties: { ...f.properties, _color: mColors[h % mColors.length], _selected: isSelected ? 1 : 0 } };
-    });
-    plotsSrc.setData({ type: 'FeatureCollection', features: updatedFeatures });
-    if (mapObj.getLayer('plots-fill')) {
-      mapObj.setPaintProperty('plots-fill', 'fill-color', ['case',
-        ['==', ['get', '_selected'], 1], '#FBBF24', ['get', '_color']
-      ]);
-      mapObj.setPaintProperty('plots-fill', 'fill-opacity', ['case',
-        ['==', ['get', '_selected'], 1], 0.65,
-        selMurabba ? ['case', ['==', ['get', 'khewat_no'], selMurabba], 0.4, 0.08] : 0.25
-      ]);
-    }
-    if (mapObj.getLayer('plots-line')) {
-      mapObj.setPaintProperty('plots-line', 'line-color', ['case',
-        ['==', ['get', '_selected'], 1], '#F59E0B', '#F5F0E8'
-      ]);
-      mapObj.setPaintProperty('plots-line', 'line-width', ['case',
-        ['==', ['get', '_selected'], 1], 4, 2
-      ]);
-      mapObj.setPaintProperty('plots-line', 'line-opacity', ['case',
-        ['==', ['get', '_selected'], 1], 1.0,
-        selMurabba ? ['case', ['==', ['get', 'khewat_no'], selMurabba], 1, 0.3] : 0.7
-      ]);
-    }
-  }, [selected, mapObj, features, selMurabba]);
+  }, [selected, mapObj]);
 
   const selectedPlots = [...selected.values()];
   const selIds = new Set(selectedPlots.map(f => String(f.properties.id || '')).filter(Boolean));
