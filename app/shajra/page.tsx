@@ -146,7 +146,7 @@ export default function ShajraPage() {
 
       // Step 2: Load polygons (slower)
       setLoadingStage('भूखंड नक्शे लोड हो रहे हैं...');
-      const data = await getPolygons(vName, district);
+      const data = await getPolygons(vName, district, tehsil);
       // Filter: only if polygons span very wide (>0.2° = ~20km) — duplicate village in different location
       let filteredFeats = data.features;
       if (filteredFeats.length > 10) {
