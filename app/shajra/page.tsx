@@ -199,7 +199,7 @@ export default function ShajraPage() {
         }
       });
 
-      // Fit bounds
+      // Fit bounds + village boundary outline
       try {
         const coords = feats.flatMap((f: PolygonFeature) => {
           const c = f.geometry?.coordinates;
@@ -208,7 +208,16 @@ export default function ShajraPage() {
         }).filter((c: number[]) => Array.isArray(c) && c.length >= 2 && isFinite(c[0]) && isFinite(c[1]));
         if (coords.length) {
           const lngs = coords.map((c: number[]) => c[0]), lats = coords.map((c: number[]) => c[1]);
-          mapObj.fitBounds([[Math.min(...lngs), Math.min(...lats)], [Math.max(...lngs), Math.max(...lats)]], { padding: 50 });
+          const minLng = Math.min(...lngs), maxLng = Math.max(...lngs), minLat = Math.min(...lats), maxLat = Math.max(...lats);
+          mapObj.fitBounds([[minLng, minLat], [maxLng, maxLat]], { padding: 50 });
+
+          // Blue village boundary outline
+          ['village-boundary-line'].forEach(l => { if (mapObj.getLayer(l)) mapObj.removeLayer(l); });
+          if (mapObj.getSource('village-boundary')) mapObj.removeSource('village-boundary');
+          mapObj.addSource('village-boundary', { type: 'geojson', data: { type: 'FeatureCollection', features: feats } });
+          mapObj.addLayer({ id: 'village-boundary-line', type: 'line', source: 'village-boundary', paint: {
+            'line-color': '#3B82F6', 'line-width': 2, 'line-opacity': 0.8
+          }}, 'plots-fill');
         }
       } catch (e) { console.warn('fitBounds:', e); }
 
