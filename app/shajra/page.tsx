@@ -79,16 +79,7 @@ export default function ShajraPage() {
           'https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}'
         ], tileSize: 256, maxzoom: 20 });
         map.addLayer({ id: 'satellite-layer', type: 'raster', source: 'satellite', paint: { 'raster-opacity': 1 } });
-        // Bhuvan village boundaries
-        map.addSource('bhuvan-vill', { type: 'raster', tiles: [
-          'https://bhuvan-vec1.nrsc.gov.in/bhuvan/wms?service=WMS&version=1.1.1&request=GetMap&layers=basemap:HR_Vill&bbox={bbox-epsg-3857}&width=256&height=256&srs=EPSG:3857&format=image/png&transparent=true'
-        ], tileSize: 256 });
-        map.addLayer({ id: 'bhuvan-vill-layer', type: 'raster', source: 'bhuvan-vill', paint: { 'raster-opacity': 0.3 } });
-        // Bhuvan roads
-        map.addSource('bhuvan-roads', { type: 'raster', tiles: [
-          'https://bhuvan-vec1.nrsc.gov.in/bhuvan/wms?service=WMS&version=1.1.1&request=GetMap&layers=mmi:HR_ROAD_NETWORK_Q4_2022&bbox={bbox-epsg-3857}&width=256&height=256&srs=EPSG:3857&format=image/png&transparent=true'
-        ], tileSize: 256 });
-        map.addLayer({ id: 'bhuvan-roads-layer', type: 'raster', source: 'bhuvan-roads', paint: { 'raster-opacity': 0.35 } });
+        // (Bhuvan WMS layers removed — they showed polygon outlines for ALL villages across Haryana)
       });
       map.addControl(new maplibregl.NavigationControl(), 'bottom-right');
       setMapObj(map);
